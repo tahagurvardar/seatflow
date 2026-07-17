@@ -2,25 +2,61 @@
   "name": "seatflow",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "prisma generate",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.mts",
+    "test:watch": "vitest --config vitest.config.mts",
+    "test:integration": "tsx scripts/test-database.ts test",
+    "db:generate": "prisma generate",
+    "db:migrate": "tsx scripts/database.ts migrate",
+    "db:migrate:deploy": "tsx scripts/database.ts deploy",
+    "db:reset": "tsx scripts/database.ts reset",
+    "db:studio": "tsx scripts/database.ts studio",
+    "db:test:migrate": "tsx scripts/test-database.ts migrate",
+    "db:test:reset": "tsx scripts/test-database.ts reset",
+    "admin:promote": "tsx scripts/promote-admin.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@better-auth/prisma-adapter": "1.6.23",
+    "@prisma/adapter-pg": "7.8.0",
+    "@prisma/client": "7.8.0",
+    "better-auth": "1.6.23",
     "next": "16.2.10",
+    "pg": "8.22.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",
+    "@types/pg": "8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.3",
+    "dotenv": "17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "jsdom": "^29.1.1",
+    "prisma": "7.8.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "4.23.1",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.13",
+    "postcss": "8.5.19"
   }
 }

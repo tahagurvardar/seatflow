@@ -1,0 +1,273 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PlatformRole {
+  USER
+  ADMIN
+}
+
+enum OrganizationKind {
+  ORGANIZER
+  VENUE_OPERATOR
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum VenueStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum SpaceType {
+  CINEMA
+  THEATRE
+  CONCERT_HALL
+  STADIUM
+  ARENA
+  GENERAL
+}
+
+enum SpaceStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum SeatMapStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SeatType {
+  STANDARD
+  ACCESSIBLE
+  COMPANION
+  PREMIUM
+}
+
+enum SeatState {
+  ACTIVE
+  BLOCKED
+}
+
+model User {
+  id            String       @id @default(cuid())
+  name          String
+  email         String       @unique
+  emailVerified Boolean      @default(false)
+  image         String?
+  platformRole  PlatformRole @default(USER)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  memberships Membership[]
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@index([expiresAt])
+}
+
+model Organization {
+  id        String           @id @default(cuid())
+  name      String
+  slug      String           @unique
+  kind      OrganizationKind
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  memberships Membership[]
+  venues      Venue[]
+
+  @@index([kind])
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MembershipRole @default(MEMBER)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([userId])
+  @@index([organizationId, role])
+}
+
+model Venue {
+  id             String      @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  description    String?
+  addressLine1   String
+  addressLine2   String?
+  city           String
+  countryCode    String      @db.Char(2)
+  postalCode     String?
+  timeZone       String
+  status         VenueStatus @default(DRAFT)
+  archivedAt     DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  spaces       Space[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([organizationId, name])
+}
+
+model Space {
+  id          String      @id @default(cuid())
+  venueId     String
+  name        String
+  slug        String
+  description String?
+  type        SpaceType   @default(GENERAL)
+  status      SpaceStatus @default(DRAFT)
+  archivedAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  venue    Venue     @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  seatMaps SeatMap[]
+
+  @@unique([venueId, slug])
+  @@index([venueId, status])
+  @@index([venueId, name])
+}
+
+model SeatMap {
+  id              String        @id @default(cuid())
+  spaceId         String
+  sourceSeatMapId String?
+  name            String
+  version         Int
+  status          SeatMapStatus @default(DRAFT)
+  publishedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  space         Space         @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  sourceSeatMap SeatMap?      @relation("SeatMapSource", fields: [sourceSeatMapId], references: [id], onDelete: SetNull)
+  clones        SeatMap[]     @relation("SeatMapSource")
+  sections      SeatSection[]
+
+  @@unique([spaceId, version])
+  @@index([spaceId, status])
+  @@index([sourceSeatMapId])
+}
+
+model SeatSection {
+  id           String   @id @default(cuid())
+  seatMapId    String
+  name         String
+  code         String
+  displayOrder Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  seatMap SeatMap   @relation(fields: [seatMapId], references: [id], onDelete: Cascade)
+  rows    SeatRow[]
+
+  @@unique([seatMapId, code])
+  @@index([seatMapId, displayOrder])
+}
+
+model SeatRow {
+  id           String   @id @default(cuid())
+  sectionId    String
+  label        String
+  displayOrder Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  section SeatSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  seats   Seat[]
+
+  @@unique([sectionId, label])
+  @@index([sectionId, displayOrder])
+}
+
+model Seat {
+  id           String    @id @default(cuid())
+  rowId        String
+  label        String
+  displayOrder Int
+  x            Int
+  y            Int
+  type         SeatType  @default(STANDARD)
+  state        SeatState @default(ACTIVE)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  row SeatRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+
+  @@unique([rowId, label])
+  @@index([rowId, displayOrder])
+  @@index([type, state])
+}

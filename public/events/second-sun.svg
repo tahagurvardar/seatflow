@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Under the Second Sun artwork</title>
+  <desc id="desc">Two abstract suns cast long shadows across a stage</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#2c1148"/><stop offset=".65" stop-color="#7b2d62"/><stop offset="1" stop-color="#dc6951"/></linearGradient>
+    <radialGradient id="sun1"><stop stop-color="#fff8bf"/><stop offset=".65" stop-color="#ffbf50"/><stop offset="1" stop-color="#ff7b3c"/></radialGradient>
+    <radialGradient id="sun2"><stop stop-color="#f3d6ff"/><stop offset=".65" stop-color="#bc7bff"/><stop offset="1" stop-color="#6638c9"/></radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="386" cy="262" r="154" fill="url(#sun1)"/>
+  <circle cx="776" cy="214" r="106" fill="url(#sun2)" opacity=".9"/>
+  <path d="M0 600 238 416l182 111 157-166 184 132 168-151 271 210v248H0Z" fill="#35123f" opacity=".72"/>
+  <path d="m386 360-174 440h330Zm390-78L621 800h286Z" fill="#1d102c" opacity=".52"/>
+  <g fill="#130d22"><path d="M276 624h26l14 176h-56Z"/><circle cx="289" cy="588" r="28"/><path d="M885 608h26l28 192h-68Z"/><circle cx="898" cy="572" r="28"/></g>
+  <path d="M0 744h1200" stroke="#ffbc77" stroke-width="3" opacity=".5"/>
+</svg>

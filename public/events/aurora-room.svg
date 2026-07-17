@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Aurora Room Sessions artwork</title>
+  <desc id="desc">Abstract amber lights over a deep blue concert stage</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08142e"/><stop offset="1" stop-color="#20104a"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#ffb347" stop-opacity=".95"/><stop offset="1" stop-color="#ff6b2c" stop-opacity="0"/></radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="22"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="920" cy="170" r="310" fill="url(#glow)" filter="url(#blur)"/>
+  <path d="M0 660 260 390l164 148 192-246 278 270 306-208v446H0Z" fill="#37156c" opacity=".76"/>
+  <g fill="none" stroke="#ffc56f" stroke-width="10" opacity=".8"><path d="M238 678V318M600 678V240M958 678V335"/><circle cx="238" cy="275" r="42"/><circle cx="600" cy="197" r="42"/><circle cx="958" cy="292" r="42"/></g>
+  <path d="M0 685c264-72 392 55 600-5s356-27 600 8v112H0Z" fill="#071020"/>
+  <g fill="#ff8a3d"><circle cx="188" cy="710" r="8"/><circle cx="330" cy="690" r="6"/><circle cx="716" cy="706" r="8"/><circle cx="1020" cy="694" r="6"/></g>
+</svg>

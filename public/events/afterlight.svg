@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Afterlight premiere artwork</title>
+  <desc id="desc">A glowing red horizon beneath a cinematic night sky</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#080b21"/><stop offset=".58" stop-color="#27204d"/><stop offset="1" stop-color="#c43e3f"/></linearGradient>
+    <linearGradient id="land" x1="0" x2="1"><stop stop-color="#090b18"/><stop offset=".5" stop-color="#25111f"/><stop offset="1" stop-color="#090b18"/></linearGradient>
+    <radialGradient id="sun"><stop stop-color="#ffd6a0"/><stop offset=".55" stop-color="#ff6b46"/><stop offset="1" stop-color="#d92e55"/></radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g fill="#fff" opacity=".75"><circle cx="116" cy="126" r="2"/><circle cx="300" cy="78" r="3"/><circle cx="466" cy="168" r="2"/><circle cx="770" cy="92" r="2"/><circle cx="1050" cy="142" r="3"/></g>
+  <circle cx="602" cy="530" r="170" fill="url(#sun)"/>
+  <path d="M0 582c210-24 334 18 476-8 170-31 292 9 422-4 116-12 200-8 302 12v218H0Z" fill="url(#land)"/>
+  <path d="M0 610c286 25 420-34 624 1 201 34 378-30 576 6" fill="none" stroke="#ff7550" stroke-width="4" opacity=".7"/>
+  <path d="m154 0 160 800M1010 0 850 800" stroke="#fff" stroke-width="2" opacity=".08"/>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">The Glass House artwork</title>
+  <desc id="desc">Geometric glass shapes lit in violet on a theatre stage</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#140d26"/><stop offset="1" stop-color="#311459"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d8c7ff" stop-opacity=".8"/><stop offset="1" stop-color="#6d38d1" stop-opacity=".18"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity=".4"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <path d="M0 0h1200L992 174H208Z" fill="#0d0719"/>
+  <ellipse cx="600" cy="680" rx="470" ry="72" fill="#0c0714" opacity=".75"/>
+  <g filter="url(#shadow)" stroke="#dfd2ff" stroke-opacity=".45" stroke-width="3">
+    <path d="m286 602 124-392 230 144-90 322Z" fill="url(#glass)"/>
+    <path d="m546 676 96-475 310 171-106 275Z" fill="url(#glass)"/>
+    <path d="m420 612 178-214 168 224-84 72Z" fill="#bf97ff" fill-opacity=".2"/>
+  </g>
+  <g fill="#ff875d"><circle cx="409" cy="539" r="12"/><circle cx="748" cy="555" r="12"/></g>
+  <path d="M124 744h952" stroke="#a883ff" stroke-width="2" opacity=".45"/>
+</svg>

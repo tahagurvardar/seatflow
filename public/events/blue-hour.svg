@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Blue Hour restored artwork</title>
+  <desc id="desc">Layered blue film frames with a soft moonlit glow</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07172d"/><stop offset="1" stop-color="#0a6282"/></linearGradient>
+    <radialGradient id="moon"><stop stop-color="#ecfbff"/><stop offset=".5" stop-color="#80d5e9"/><stop offset="1" stop-color="#2492b6" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="840" cy="235" r="245" fill="url(#moon)"/>
+  <g fill="none" stroke="#8dd8ed" stroke-width="12" opacity=".48">
+    <rect x="110" y="124" width="760" height="468" rx="20" transform="rotate(-7 490 358)"/>
+    <rect x="270" y="208" width="760" height="468" rx="20" transform="rotate(6 650 442)"/>
+  </g>
+  <g fill="#d8f8ff" opacity=".45"><rect x="86" y="192" width="42" height="54" rx="6"/><rect x="68" y="298" width="42" height="54" rx="6"/><rect x="53" y="406" width="42" height="54" rx="6"/><rect x="1018" y="312" width="42" height="54" rx="6"/><rect x="1032" y="420" width="42" height="54" rx="6"/></g>
+  <path d="M0 640c232-88 381 42 585-12 196-52 388-43 615 10v162H0Z" fill="#061221"/>
+  <path d="M0 680c265-58 441 29 646-10 162-31 354-25 554 18" fill="none" stroke="#43b2d4" stroke-width="4"/>
+</svg>

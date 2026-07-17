@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Midnight Brass Collective artwork</title>
+  <desc id="desc">Golden brass forms against an energetic red background</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#4d0a20"/><stop offset=".5" stop-color="#b32635"/><stop offset="1" stop-color="#ff6b2d"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff0a8"/><stop offset=".45" stop-color="#e8a72c"/><stop offset="1" stop-color="#7a3c09"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <g fill="none" stroke="#ffb27b" stroke-width="3" opacity=".28"><path d="M0 175h1200M0 350h1200M0 525h1200M0 700h1200"/><path d="M140 0 50 800M420 0l-45 800M780 0l45 800M1060 0l90 800"/></g>
+  <path d="M390 160c-92 50-120 180-51 259 49 57 143 51 194-4 48-51 25-126-40-134-62-8-102 55-65 99 25 30 78 17 84-24" fill="none" stroke="url(#gold)" stroke-width="62" stroke-linecap="round"/>
+  <path d="M719 164v314c0 74 86 125 151 82 60-39 54-135-13-165-45-20-98 10-99 58" fill="none" stroke="url(#gold)" stroke-width="54" stroke-linecap="round"/>
+  <circle cx="737" cy="165" r="82" fill="none" stroke="#ffd66f" stroke-width="30"/>
+  <g fill="#fff3bd"><circle cx="178" cy="640" r="9"/><circle cx="1025" cy="183" r="8"/><circle cx="965" cy="672" r="12"/></g>
+</svg>

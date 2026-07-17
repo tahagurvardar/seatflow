@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Harbor City Derby artwork</title>
+  <desc id="desc">A bright green arena field surrounded by evening lights</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#071829"/><stop offset="1" stop-color="#163c47"/></linearGradient>
+    <radialGradient id="field"><stop stop-color="#89e858"/><stop offset="1" stop-color="#187743"/></radialGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#sky)"/>
+  <g fill="#dffcff" filter="url(#glow)" opacity=".8"><circle cx="165" cy="165" r="45"/><circle cx="1035" cy="165" r="45"/></g>
+  <g fill="#fff6d5"><circle cx="165" cy="165" r="17"/><circle cx="1035" cy="165" r="17"/></g>
+  <path d="M0 418 196 260h808l196 158v382H0Z" fill="#0a2733"/>
+  <path d="m118 800 164-316h636l164 316Z" fill="url(#field)"/>
+  <path d="M600 484v316M282 484h636M426 800l56-316m292 316-56-316" fill="none" stroke="#e5ffd6" stroke-width="5" opacity=".65"/>
+  <circle cx="600" cy="642" r="82" fill="none" stroke="#e5ffd6" stroke-width="5" opacity=".65"/>
+  <g fill="#66d9ff" opacity=".55"><circle cx="74" cy="478" r="7"/><circle cx="174" cy="430" r="6"/><circle cx="1080" cy="470" r="7"/><circle cx="1004" cy="430" r="6"/></g>
+</svg>

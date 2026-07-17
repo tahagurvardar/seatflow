@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">City Court Finals artwork</title>
+  <desc id="desc">An orange basketball court drawn with bold graphic lines</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#11182d"/><stop offset="1" stop-color="#2c1747"/></linearGradient>
+    <linearGradient id="court" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffb347"/><stop offset="1" stop-color="#e84d24"/></linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <path d="M168 124h864v552H168z" fill="url(#court)" transform="rotate(-3 600 400)"/>
+  <g fill="none" stroke="#ffe6bd" stroke-width="8" opacity=".78" transform="rotate(-3 600 400)">
+    <path d="M600 124v552M168 400h864"/>
+    <circle cx="600" cy="400" r="104"/>
+    <path d="M168 250h170v300H168m864-300H862v300h170"/>
+    <path d="M338 304a118 118 0 0 1 0 192m524-192a118 118 0 0 0 0 192"/>
+  </g>
+  <circle cx="792" cy="235" r="94" fill="#f97316" stroke="#2b1726" stroke-width="12"/>
+  <path d="M698 235h188M792 141c-48 42-48 146 0 188m0-188c48 42 48 146 0 188" fill="none" stroke="#2b1726" stroke-width="9"/>
+  <path d="M0 730 1200 610v190H0Z" fill="#070b16" opacity=".68"/>
+</svg>
