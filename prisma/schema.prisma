@@ -98,6 +98,17 @@ enum Currency {
   USD
 }
 
+enum SeatInventoryState {
+  AVAILABLE
+  HELD
+}
+
+enum SeatHoldStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+}
+
 model User {
   id            String       @id @default(cuid())
   name          String
@@ -113,6 +124,7 @@ model User {
   memberships              Membership[]
   venueAccessGrantsGranted VenueAccessGrant[] @relation("VenueAccessGrantedBy")
   venueAccessGrantsRevoked VenueAccessGrant[] @relation("VenueAccessRevokedBy")
+  seatHolds                SeatHold[]
 }
 
 model Account {
@@ -279,6 +291,7 @@ model SeatSection {
   seatMap                   SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Cascade)
   rows                      SeatRow[]
   sessionPricingAssignments SessionSectionPricing[]
+  sessionInventory          SessionSeatInventory[]
 
   @@unique([seatMapId, code])
   @@index([seatMapId, displayOrder])
@@ -311,7 +324,8 @@ model Seat {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  row SeatRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  row              SeatRow                @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  sessionInventory SessionSeatInventory[]
 
   @@unique([rowId, label])
   @@index([rowId, displayOrder])
@@ -393,6 +407,8 @@ model EventSession {
   seatMap        SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
   priceTiers     SessionPriceTier[]
   sectionPricing SessionSectionPricing[]
+  seatInventory  SessionSeatInventory[]
+  seatHolds      SeatHold[]
 
   @@index([eventId, status])
   @@index([eventId, startAt])
@@ -416,6 +432,7 @@ model SessionPriceTier {
 
   session            EventSession            @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   sectionAssignments SessionSectionPricing[]
+  sessionInventory   SessionSeatInventory[]
 
   @@unique([sessionId, code])
   @@index([sessionId, displayOrder])
@@ -437,4 +454,81 @@ model SessionSectionPricing {
   @@index([sessionId])
   @@index([sectionId])
   @@index([priceTierId])
+}
+
+// Authoritative per-session sellable seat inventory materialized from an
+// immutable published seat map. Price and currency are immutable snapshots.
+// PostgreSQL is the single source of truth for availability and active holds.
+model SessionSeatInventory {
+  id            String             @id @default(cuid())
+  sessionId     String
+  seatId        String
+  sectionId     String
+  priceTierId   String
+  priceMinor    Int
+  currency      Currency
+  state         SeatInventoryState @default(AVAILABLE)
+  currentHoldId String?
+  holdExpiresAt DateTime?          @db.Timestamptz(3)
+  createdAt     DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
+
+  session     EventSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seat        Seat             @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  section     SeatSection      @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier   SessionPriceTier @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+  currentHold SeatHold?        @relation("HoldCurrentInventory", fields: [currentHoldId], references: [id], onDelete: Restrict)
+  holdItems   SeatHoldItem[]
+
+  @@unique([sessionId, seatId])
+  @@index([sessionId, state])
+  @@index([currentHoldId])
+  @@index([holdExpiresAt])
+  @@index([seatId])
+  @@index([priceTierId])
+  @@index([sectionId])
+}
+
+// A server-owned, all-or-nothing temporary hold over one or more inventory
+// seats within a single session. The public token is unguessable; internal ids
+// are never exposed to other customers. Holds are historical and never deleted.
+model SeatHold {
+  id             String         @id @default(cuid())
+  publicToken    String         @unique
+  sessionId      String
+  userId         String
+  status         SeatHoldStatus @default(ACTIVE)
+  idempotencyKey String
+  expiresAt      DateTime       @db.Timestamptz(3)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
+  releasedAt     DateTime?      @db.Timestamptz(3)
+  expiredAt      DateTime?      @db.Timestamptz(3)
+
+  session          EventSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items            SeatHoldItem[]
+  currentInventory SessionSeatInventory[] @relation("HoldCurrentInventory")
+
+  @@unique([sessionId, userId, idempotencyKey])
+  @@index([status, expiresAt])
+  @@index([userId, status])
+  @@index([sessionId, status])
+}
+
+// One seat within a hold. Price and currency are copied from inventory at
+// acquisition time, never supplied by the client, and preserved as history.
+model SeatHoldItem {
+  id          String   @id @default(cuid())
+  holdId      String
+  inventoryId String
+  priceMinor  Int
+  currency    Currency
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  hold      SeatHold             @relation(fields: [holdId], references: [id], onDelete: Restrict)
+  inventory SessionSeatInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
+
+  @@unique([holdId, inventoryId])
+  @@index([inventoryId])
 }

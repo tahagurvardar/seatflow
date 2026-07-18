@@ -25,7 +25,9 @@ describe("seat-map components", () => {
   it("renders a readable seat preview with state and coordinate metadata", () => {
     render(<SeatMapRenderer sections={sections} />);
     expect(screen.getByText("Stage / screen")).toBeInTheDocument();
-    expect(screen.getByRole("note")).toHaveTextContent(/not available in Phase 3/i);
+    expect(screen.getByRole("note")).toHaveTextContent(
+      /checkout and booking are not available in Phase 4A/i,
+    );
     const blockedSeat = screen.getByRole("img", {
       name: /Main, row A, seat 2: premium, blocked/i,
     });

@@ -19,6 +19,9 @@ export const ROUTES = {
   venueOperatorOnboarding: "/venue-operator/onboarding",
   admin: "/admin",
   eventDetail: (slug: string) => `/events/${slug}` as const,
+  eventSessionSeats: (slug: string, sessionId: string) =>
+    `/events/${slug}/sessions/${sessionId}/seats` as const,
+  customerHold: (holdToken: string) => `/customer/holds/${holdToken}` as const,
   organizerEvents: (organizationSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events` as const,
   organizerNewEvent: (organizationSlug: string) =>
@@ -84,12 +87,14 @@ export const PUBLIC_ROUTES = [
   ROUTES.home,
   ROUTES.events,
   "/events/[slug]",
+  "/events/[slug]/sessions/[sessionId]/seats",
   ROUTES.login,
   ROUTES.register,
 ] as const;
 
 export const PROTECTED_ROUTES = [
   ROUTES.customerDashboard,
+  "/customer/holds/[holdToken]",
   ROUTES.organizerDashboard,
   ROUTES.organizerOnboarding,
   ROUTES.venueOperatorDashboard,

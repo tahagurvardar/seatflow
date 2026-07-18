@@ -12,6 +12,7 @@ import { Icon } from "@/components/ui/icon";
 import { ROUTES, SITE_CONFIG } from "@/config/site";
 import { formatVenueDateTime } from "@/features/events/date-time";
 import { formatMinorCurrency } from "@/features/events/money";
+import type { PublicEventSession } from "@/domain/event";
 import { getRelatedEvents } from "@/lib/events";
 import {
   getPublicEventBySlug,
@@ -23,6 +24,25 @@ interface EventDetailPageProps {
 }
 
 export const dynamic = "force-dynamic";
+
+// A session is sellable when it is on sale and the current server time is within
+// its sales window and before it starts. Seat availability itself is confirmed
+// on the seat-selection page and when the hold is created.
+function isSessionSellableNow(session: PublicEventSession, now: Date) {
+  return (
+    session.availability === "on-sale" &&
+    new Date(session.salesStartDate) <= now &&
+    now < new Date(session.salesEndDate) &&
+    now < new Date(session.startDate)
+  );
+}
+
+function sessionUnavailableReason(session: PublicEventSession, now: Date) {
+  if (now >= new Date(session.startDate)) return "This session has started.";
+  if (now >= new Date(session.salesEndDate)) return "Sales have closed.";
+  if (session.availability === "sales-paused") return "Sales are paused.";
+  return "Not on sale yet.";
+}
 
 export async function generateMetadata({
   params,
@@ -54,6 +74,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   const firstSession = event.sessions[0];
   if (!firstSession) notFound();
   const relatedEvents = getRelatedEvents(event, allEvents);
+  const now = new Date();
+  const primarySellableSession = event.sessions.find((session) =>
+    isSessionSellableNow(session, now),
+  );
 
   return (
     <>
@@ -136,29 +160,52 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 Upcoming sessions
               </h2>
               <div className="mt-5 space-y-4">
-                {event.sessions.map((session) => (
-                  <article key={session.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="font-bold text-slate-950">
-                          {formatVenueDateTime(session.startDate, session.timeZone)}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-600">
-                          {session.venue} · {session.space} · {session.city}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-500">
-                          {session.sellableCapacity} configured sellable seats · exact map v{session.seatMap.version}
-                        </p>
+                {event.sessions.map((session) => {
+                  const sellable = isSessionSellableNow(session, now);
+                  return (
+                    <article key={session.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="font-bold text-slate-950">
+                            {formatVenueDateTime(session.startDate, session.timeZone)}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-600">
+                            {session.venue} · {session.space} · {session.city}
+                          </p>
+                          <p className="mt-2 text-xs text-slate-500">
+                            {session.sellableCapacity} configured sellable seats · exact map v{session.seatMap.version}
+                          </p>
+                        </div>
+                        <div className="sm:text-right">
+                          <AvailabilityBadge status={session.availability} />
+                          <p className="mt-2 font-black text-slate-950">
+                            From {formatMinorCurrency(session.minimumPriceMinor, session.currency)}
+                          </p>
+                        </div>
                       </div>
-                      <div className="sm:text-right">
-                        <AvailabilityBadge status={session.availability} />
-                        <p className="mt-2 font-black text-slate-950">
-                          From {formatMinorCurrency(session.minimumPriceMinor, session.currency)}
-                        </p>
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                        {sellable ? (
+                          <>
+                            <span className="text-xs font-semibold text-emerald-700">
+                              Seats can be held now
+                            </span>
+                            <Link
+                              href={ROUTES.eventSessionSeats(event.slug, session.id)}
+                              className={buttonStyles({ size: "sm" })}
+                            >
+                              <Icon name="ticket" className="size-4" />
+                              Select seats
+                            </Link>
+                          </>
+                        ) : (
+                          <span className="text-xs font-semibold text-slate-500">
+                            {sessionUnavailableReason(session, now)}
+                          </span>
+                        )}
                       </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             </section>
           </article>
@@ -171,19 +218,32 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               {formatMinorCurrency(event.minimumPriceMinor, event.currency)}
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Prices and section coverage are persisted. Availability counts, holds, and checkout begin in Phase 4 or later.
+              Prices and section coverage are persisted. Choose seats to place a
+              temporary hold; checkout and payment arrive in Phase 5.
             </p>
-            <button
-              type="button"
-              disabled
-              aria-describedby="seat-selection-note"
-              className={buttonStyles({ size: "lg", className: "mt-6 w-full" })}
-            >
-              <Icon name="ticket" className="size-4" />
-              Booking unavailable
-            </button>
+            {primarySellableSession ? (
+              <Link
+                href={ROUTES.eventSessionSeats(event.slug, primarySellableSession.id)}
+                aria-describedby="seat-selection-note"
+                className={buttonStyles({ size: "lg", className: "mt-6 w-full" })}
+              >
+                <Icon name="ticket" className="size-4" />
+                Select seats
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                aria-describedby="seat-selection-note"
+                className={buttonStyles({ size: "lg", className: "mt-6 w-full" })}
+              >
+                <Icon name="ticket" className="size-4" />
+                Not on sale right now
+              </button>
+            )}
             <div id="seat-selection-note" className="mt-4 rounded-2xl bg-amber-50 p-4 text-xs leading-5 text-amber-900">
-              No seats are being held and no payment will be taken in Phase 3.
+              Holding seats reserves them for a short time. No payment is taken and no
+              ticket is issued in Phase 4A.
             </div>
           </aside>
         </Container>

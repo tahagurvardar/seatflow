@@ -21,6 +21,8 @@
     "db:test:migrate": "tsx scripts/test-database.ts migrate",
     "db:test:reset": "tsx scripts/test-database.ts reset",
     "admin:promote": "tsx scripts/promote-admin.ts",
+    "holds:backfill": "tsx scripts/backfill-inventory.ts",
+    "holds:sweep": "tsx scripts/sweep-holds.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

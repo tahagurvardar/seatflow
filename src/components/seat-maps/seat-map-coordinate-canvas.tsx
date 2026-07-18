@@ -1,39 +1,24 @@
 import type { ReactNode } from "react";
 
-import type { SeatState, SeatType } from "@/generated/prisma/enums";
 import { cn } from "@/lib/utils";
 
-interface CoordinateSeat {
+interface CanvasSeat {
   id: string;
-  label: string;
   x: number;
   y: number;
-  type: SeatType;
-  state: SeatState;
 }
 
-interface CoordinateRow {
+interface CanvasRow<TSeat extends CanvasSeat> {
   id: string;
   label: string;
-  seats: CoordinateSeat[];
+  seats: TSeat[];
 }
 
-interface CoordinateSection {
-  id: string;
-  code: string;
-  rows: CoordinateRow[];
-}
-
-interface SeatRenderContext {
-  row: CoordinateRow;
-  seat: CoordinateSeat;
-}
-
-interface SeatMapCoordinateCanvasProps {
+interface SeatMapCoordinateCanvasProps<TSeat extends CanvasSeat> {
   ariaLabel: string;
   className?: string;
-  renderSeat: (context: SeatRenderContext) => ReactNode;
-  section: CoordinateSection;
+  renderSeat: (context: { row: CanvasRow<TSeat>; seat: TSeat }) => ReactNode;
+  section: { rows: CanvasRow<TSeat>[] };
 }
 
 const ROW_LABEL_GUTTER = 56;
@@ -41,18 +26,26 @@ const CANVAS_PADDING = 12;
 const SEAT_SIZE = 36;
 const EMPTY_ROW_SPACING = 44;
 
-function rowTop(row: CoordinateRow, rowIndex: number) {
+function rowTop<TSeat extends CanvasSeat>(
+  row: { seats: TSeat[] },
+  rowIndex: number,
+) {
   return row.seats.length > 0
     ? Math.min(...row.seats.map((seat) => seat.y))
     : rowIndex * EMPTY_ROW_SPACING;
 }
 
-export function SeatMapCoordinateCanvas({
+/**
+ * Shared coordinate seat-map canvas. It positions seats from their (x, y)
+ * coordinates and delegates the seat visuals to `renderSeat`, so the same layout
+ * engine drives the read-only preview and the interactive selectable picker.
+ */
+export function SeatMapCoordinateCanvas<TSeat extends CanvasSeat>({
   ariaLabel,
   className,
   renderSeat,
   section,
-}: SeatMapCoordinateCanvasProps) {
+}: SeatMapCoordinateCanvasProps<TSeat>) {
   const seats = section.rows.flatMap((row) => row.seats);
   const rowPositions = section.rows.map((row, index) => rowTop(row, index));
   const maximumX = Math.max(0, ...seats.map((seat) => seat.x));

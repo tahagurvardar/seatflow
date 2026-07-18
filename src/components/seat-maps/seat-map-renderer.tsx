@@ -35,8 +35,9 @@ export function SeatMapRenderer({ sections }: SeatMapRendererProps) {
         className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900"
         role="note"
       >
-        This is a read-only venue layout preview. Seat holds and booking are not
-        available in Phase 3.
+        This is a read-only venue layout preview. Use an eligible session&apos;s seat
+        selection page for temporary holds; checkout and booking are not available in
+        Phase 4A.
       </p>
       <div className="mx-auto max-w-xl rounded-b-[2rem] border-x border-b border-orange-200 bg-orange-50 py-3 text-center text-xs font-black uppercase tracking-[0.24em] text-orange-800">
         Stage / screen
