@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/generated/prisma/client";
+import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import {
   canArchiveEvent,
   canCancelEvent,
@@ -28,6 +28,8 @@ import {
   eventSessionDetailInclude,
   getSessionPricingCoverage,
 } from "@/server/events/event-session-service";
+import { releaseActiveHoldsForSession } from "@/server/holds/expiry-service";
+import { enqueueInventoryEvent } from "@/server/inventory-events/outbox-service";
 
 interface OrganizerScope {
   userId: string;
@@ -197,6 +199,24 @@ export async function cancelEvent(database: PrismaClient, scope: EventScope) {
     }
 
     const cancelledAt = new Date();
+    const sessions = await transaction.eventSession.findMany({
+      where: {
+        eventId: event.id,
+        status: { notIn: ["CANCELLED", "COMPLETED"] },
+      },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    if (sessions.length > 0) {
+      const sessionIds = sessions.map((session) => session.id);
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id"
+        FROM "SessionSeatInventory"
+        WHERE "sessionId" IN (${Prisma.join(sessionIds)})
+        ORDER BY "sessionId" ASC, "seatId" ASC
+        FOR UPDATE
+      `);
+    }
     await transaction.eventSession.updateMany({
       where: {
         eventId: event.id,
@@ -204,6 +224,17 @@ export async function cancelEvent(database: PrismaClient, scope: EventScope) {
       },
       data: { status: "CANCELLED", cancelledAt },
     });
+
+    for (const session of sessions) {
+      await releaseActiveHoldsForSession(transaction, session.id, cancelledAt);
+      await enqueueInventoryEvent(transaction, {
+        eventType: "SESSION_CANCELLED",
+        sessionId: session.id,
+        aggregateId: session.id,
+        deduplicationKey: `session-cancelled:${session.id}`,
+        now: cancelledAt,
+      });
+    }
 
     return transaction.event.update({
       where: { id: event.id },

@@ -7,6 +7,8 @@ export async function resetIntegrationDatabase(database: PrismaClient) {
       "Session",
       "Account",
       "Membership",
+      "InventoryEventOutbox",
+      "InventoryOperationsMetric",
       "SeatHoldItem",
       "SeatHold",
       "SessionSeatInventory",

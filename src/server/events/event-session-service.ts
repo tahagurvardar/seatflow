@@ -26,6 +26,7 @@ import {
 } from "@/server/events/errors";
 import { releaseActiveHoldsForSession } from "@/server/holds/expiry-service";
 import { ensureSessionInventory } from "@/server/holds/inventory-service";
+import { enqueueInventoryEvent } from "@/server/inventory-events/outbox-service";
 
 export const eventSessionDetailInclude = {
   venue: true,
@@ -443,6 +444,7 @@ export async function cancelEventSession(
     await transaction.$queryRaw`
       SELECT "id" FROM "SessionSeatInventory"
       WHERE "sessionId" = ${access.eventSession.id}
+      ORDER BY "seatId" ASC
       FOR UPDATE
     `;
     const cancelled = await transaction.eventSession.update({
@@ -452,6 +454,13 @@ export async function cancelEventSession(
     // Existing active holds are released (not invented into bookings) and their
     // seats returned to AVAILABLE; hold history is preserved.
     await releaseActiveHoldsForSession(transaction, access.eventSession.id, now);
+    await enqueueInventoryEvent(transaction, {
+      eventType: "SESSION_CANCELLED",
+      sessionId: access.eventSession.id,
+      aggregateId: access.eventSession.id,
+      deduplicationKey: `session-cancelled:${access.eventSession.id}`,
+      now,
+    });
     return cancelled;
   });
 }

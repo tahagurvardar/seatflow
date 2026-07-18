@@ -13,6 +13,7 @@
     "test": "vitest run --config vitest.config.mts",
     "test:watch": "vitest --config vitest.config.mts",
     "test:integration": "tsx scripts/test-database.ts test",
+    "test:redis": "tsx scripts/test-redis.ts",
     "db:generate": "prisma generate",
     "db:migrate": "tsx scripts/database.ts migrate",
     "db:migrate:deploy": "tsx scripts/database.ts deploy",
@@ -23,6 +24,11 @@
     "admin:promote": "tsx scripts/promote-admin.ts",
     "holds:backfill": "tsx scripts/backfill-inventory.ts",
     "holds:sweep": "tsx scripts/sweep-holds.ts",
+    "inventory:dispatch": "tsx scripts/dispatch-inventory-events.ts",
+    "inventory:dispatcher": "tsx scripts/dispatch-inventory-events.ts --continuous",
+    "holds:schedule": "tsx scripts/register-hold-expiry-schedule.ts",
+    "holds:worker": "tsx scripts/hold-expiry-worker.ts",
+    "realtime:gateway": "tsx scripts/realtime-gateway.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -30,10 +36,14 @@
     "@prisma/adapter-pg": "7.8.0",
     "@prisma/client": "7.8.0",
     "better-auth": "1.6.23",
+    "bullmq": "^5.80.8",
+    "ioredis": "^5.11.1",
     "next": "16.2.10",
     "pg": "8.22.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@
 
 SeatFlow supports the journey from event discovery to a future verified digital ticket. Every authenticated user is a customer. Platform roles are `USER` and explicitly bootstrapped `ADMIN`; tenant capability comes independently from `OWNER`, `ADMIN`, or `MEMBER` memberships in `ORGANIZER` or `VENUE_OPERATOR` organizations.
 
-## Phase 3 and Phase 4A delivered scope
+## Phase 3 through Phase 4B delivered scope
 
 - Organizer-owned persistent events in concert, cinema, theatre, sport, and other categories
 - One or more concrete sessions stored as UTC instants and rendered in venue-local time
@@ -23,6 +23,9 @@ SeatFlow supports the journey from event discovery to a future verified digital 
 - Request idempotency scoped to customer, session, key, and exact order-independent seat set
 - Manual owner release, lazy expiry reclamation, bounded expiry sweeping, and cancellation release
 - Coordinate-based seat selection, customer-safe availability states, hold details/countdowns, and organizer aggregate counts
+- Transactional inventory invalidations for materialization, hold creation/release/expiry, and cancellation
+- Redis Streams fan-out, BullMQ expiry automation, signed session rooms, reconnect refresh, and disconnected fallback
+- Live customer selection reconciliation and aggregate-only organizer refresh without trusting notification payloads
 
 OWNER and ADMIN members manage their authorized tenant resources. MEMBER users can inspect them but are read-only. All mutations re-authorize the current user and validate route context, nested ancestry, and lifecycle on the server.
 
@@ -52,9 +55,9 @@ Prices never use floating point. A tier stores a non-negative integer number of 
 
 `SessionSeatInventory` is the sellable capacity for one concrete session, not a mutable view of the seat map. Each row copies the published session tier's integer price and currency at materialization time. `SeatHoldItem` copies the inventory snapshot again when acquired. Client-supplied price, currency, expiry, ownership, or status is outside the hold contract and is ignored or rejected.
 
-## Explicit Phase 4A exclusions
+## Explicit Phase 4B exclusions
 
-There is no Redis, BullMQ, automatic scheduler, WebSocket, Socket.IO, server-pushed availability, booking, order, checkout, payment, payment webhook, ticket, QR code, email delivery, coupon, refund, sales analytics, waitlist, dynamic pricing, or per-seat override. The countdown is informational; PostgreSQL and server time decide expiry. Phase 4B adds delivery and operational automation, while Phase 5 begins checkout/payment/booking work.
+There is no booking, order, checkout, payment, payment webhook, ticket, QR code, email delivery, coupon, refund, sales analytics, waitlist, dynamic pricing, or per-seat override. Redis and Socket.IO deliver invalidations only; BullMQ invokes PostgreSQL expiry only. The countdown remains informational, and PostgreSQL plus server time decide expiry. Phase 5 begins checkout/payment/booking work.
 
 ## Product quality requirements
 

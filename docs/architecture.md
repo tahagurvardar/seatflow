@@ -2,7 +2,7 @@
 
 ## Architectural style
 
-SeatFlow is a modular monolith on Next.js 16 App Router. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, and active holds.
+SeatFlow is a modular monolith on Next.js 16 App Router with separate Node worker and realtime processes. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, active holds, and the transactional delivery hand-off.
 
 Database and Better Auth clients initialize lazily, so code generation and production builds do not require a live connection. Protected pages and every action perform fresh server-side authorization.
 
@@ -32,6 +32,7 @@ erDiagram
   SESSION_PRICE_TIER ||--o{ SESSION_SEAT_INVENTORY : prices
   USER ||--o{ SEAT_HOLD : owns
   EVENT_SESSION ||--o{ SEAT_HOLD : receives
+  EVENT_SESSION ||--o{ INVENTORY_EVENT_OUTBOX : emits
   SEAT_HOLD ||--|{ SEAT_HOLD_ITEM : contains
   SESSION_SEAT_INVENTORY ||--o{ SEAT_HOLD_ITEM : records
 ```
@@ -76,15 +77,31 @@ Transactions use bounded retry for PostgreSQL deadlock/serialization failures on
 
 The default TTL is ten minutes and the default maximum is eight seats. Both are bounded server configuration. Manual owner release and session cancellation release inventory transactionally. Request-time lazy reclamation prevents expired rows from remaining trapped if the sweeper is unavailable. The operations sweeper claims bounded batches with `FOR UPDATE SKIP LOCKED`, so concurrent sweepers partition work safely. Phase 4A does not schedule the command automatically.
 
+## Phase 4B transactional delivery
+
+Every authoritative mutation inserts an `InventoryEventOutbox` row before its PostgreSQL transaction commits. The payload is a strict public invalidation DTO: unique event ID, session ID, event type, and trusted server timestamp. Customer identity, internal ownership, hold tokens, authentication data, and organization data are absent. Unique lifecycle deduplication keys and database lifecycle/size checks protect direct writes.
+
+Dispatchers claim bounded due batches with `FOR UPDATE SKIP LOCKED`. Redis publication uses one Lua operation to set an expiring event-dedup key and append to a bounded Redis Stream atomically. PostgreSQL is marked processed only after delivery succeeds. Redacted failures schedule exponential backoff; the configured final attempt dead-letters the row. A Redis error occurs after the inventory commit boundary and therefore cannot invalidate or roll back a hold.
+
+BullMQ registers one repeatable job, but the job only invokes the existing PostgreSQL sweeper. Redis TTLs never release inventory. Concurrent BullMQ workers remain safe because the database sweeper owns claiming and lifecycle guards.
+
+## Realtime invalidation and refresh
+
+Socket.IO is a standalone gateway consuming the Redis Stream. Web and organizer pages receive short-lived HMAC room tickets only after their public-visibility or tenant-authorization checks pass. Each socket joins one server-derived session room. Connection and subscription limits, exact origin checks, strict event parsing, and fixed key namespaces prevent arbitrary subscription/key injection.
+
+Messages are invalidations, not inventory deltas. A client validates session/event identity, tolerates duplicates and stale order, then fetches a no-store PostgreSQL snapshot. Local selected seats are reconciled against that snapshot. Reconnect, Redis recovery, window focus, and low-frequency disconnected polling all trigger the same authoritative refresh path. The gateway never computes availability.
+
 ## Public query strategy
 
 Public services query only published events with future eligible sessions. They calculate persisted-domain view models containing earliest session, venue/city, minimum configured price, currency, capacity, and read-only map data. The seat-selection query maps inventory to `AVAILABLE`, `HELD_BY_YOU`, `UNAVAILABLE`, or `BLOCKED`; another customer's hold linkage is never serialized. Invalid, incomplete, cancelled, archived, and unpublished records are filtered out; there is no fixture fallback.
 
-There is no Redis cache or real-time delivery in Phase 4A. PostgreSQL remains the only source of truth, Server Components read at request time, and hold creation performs the decisive availability check. A browser refresh is the synchronization mechanism until Phase 4B.
+Phase 4B adds Redis transport and real-time invalidation without adding a Redis availability cache. PostgreSQL remains the only source of truth, no-store snapshot handlers read it at request time, and hold creation performs the decisive availability check.
 
 ## Testing strategy
 
 - Unit tests cover event/session rules plus sales-window boundaries, hold lifecycle, totals, selection validation, idempotency matching, materialization, safe view models, and availability mapping.
 - Component tests cover organizer/customer forms and summaries, coordinate selection states, prices, maximum feedback, pending/conflict behavior, fake-time countdowns, and empty states.
 - PostgreSQL tests cover the Phase 0–3 baseline plus materialization, immutable snapshots, ownership, all-or-nothing acquisition, concurrency, idempotency, release, expiry, cancellation, and direct invariant violations.
-- The integration runner accepts only a distinct `TEST_DATABASE_URL`, resets it, and applies the complete append-only migration chain through Phase 4A.
+- Phase 4B PostgreSQL tests cover atomic outbox commit/rollback, every mutation integration, concurrent dispatch claiming, retry/backoff, and dead-letter lifecycle.
+- A separate mandatory real-Redis suite covers Streams publication/deduplication, cursor reconnect, signed room isolation, outage/recovery, and multi-worker BullMQ expiry.
+- The integration runners accept only a distinct `TEST_DATABASE_URL`, reset it, and apply the complete append-only migration chain through Phase 4B.

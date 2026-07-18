@@ -37,7 +37,7 @@ export function SeatMapRenderer({ sections }: SeatMapRendererProps) {
       >
         This is a read-only venue layout preview. Use an eligible session&apos;s seat
         selection page for temporary holds; checkout and booking are not available in
-        Phase 4A.
+        Phase 4B.
       </p>
       <div className="mx-auto max-w-xl rounded-b-[2rem] border-x border-b border-orange-200 bg-orange-50 py-3 text-center text-xs font-black uppercase tracking-[0.24em] text-orange-800">
         Stage / screen

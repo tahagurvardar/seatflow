@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import { recordTransactionRetry } from "@/server/operations/inventory-metrics";
 
 export { Prisma };
 
@@ -62,6 +63,7 @@ export async function runInTransaction<Result>(
       if (!isRetryableTransactionError(error) || attempt === attempts) {
         throw error;
       }
+      await recordTransactionRetry(database);
       // Small jittered backoff so contending retriers do not resynchronize.
       await new Promise((resolve) =>
         setTimeout(resolve, attempt * 12 + Math.floor(Math.random() * 24)),

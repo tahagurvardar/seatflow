@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import { recordTransactionRetry } from "@/server/operations/inventory-metrics";
 
 function isWriteConflict(error: unknown) {
   return (
@@ -25,6 +26,7 @@ export async function withSerializableRetry<Result>(
       if (!isWriteConflict(error) || attempt === maximumAttempts) {
         throw error;
       }
+      await recordTransactionRetry(database);
     }
   }
 

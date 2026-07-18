@@ -57,6 +57,20 @@ Only a draft event with no sessions can be hard-deleted by an authorized organiz
 
 Integration commands require `TEST_DATABASE_URL`. The name must visibly contain `test`, it must differ from development/runtime URLs, and only that validated target is reset. Tests apply the complete append-only migration chain.
 
+## Phase 4B event and realtime boundaries
+
+- PostgreSQL writes the inventory mutation and outbox event atomically. Redis is never queried to decide whether a seat is available or who owns a hold.
+- Outbox payloads contain session ID, event ID/type, and server timestamp only; customer email/ID, hold public token, auth state, and private tenant data are forbidden and size-bounded.
+- Redis keys come only from validated environment prefixes and server event IDs. Public room/session input cannot enumerate or construct Redis keys.
+- Redis Stream publication atomically deduplicates before append. PostgreSQL is marked processed only after delivery, so crash retries are safe.
+- Gateway subscriptions require a short-lived HMAC ticket signed after public-session visibility or organizer membership authorization. The ticket binds one validated session and carries no identity.
+- The gateway accepts no client inventory mutation, enforces browser origin and per-address connection bounds, and validates every Redis entry before broadcasting.
+- Browsers reject cross-session, duplicate, malformed, and stale events. A valid event triggers a PostgreSQL snapshot reload; it never changes availability directly.
+- Snapshot endpoints are no-store, input-validated, rate-limited, and re-authorize organizer scope on every request.
+- Redis outage moves clients to focus plus 30-second fallback refresh. Hold acquisition, release, expiry, cancellation, and conflict behavior remain PostgreSQL-correct.
+
+The platform-admin health endpoint returns only counts, durations, ages, and connectivity booleans. It never returns URLs, credentials, tokens, payload bodies, customer data, or stack traces.
+
 ## Current security limitations
 
-Email verification, password reset delivery, invitations, audit-log UI, rate limits, abuse controls, and stronger administrator lifecycle controls remain future work. Phase 4A has no Redis, real-time push, automatic expiry scheduler, booking, checkout, payment verification, ticket, or scanning security model. The countdown is presentation only; PostgreSQL state and server time remain authoritative.
+Email verification, password reset delivery, invitations, audit-log UI, distributed HTTP rate limiting, broader abuse controls, and stronger administrator lifecycle controls remain future work. Phase 4B has no booking, checkout, payment verification, ticket, QR, refund, email, waitlist, dynamic-pricing, or scanning security model. The countdown and Redis delivery are presentation/transport only; PostgreSQL state and server time remain authoritative.

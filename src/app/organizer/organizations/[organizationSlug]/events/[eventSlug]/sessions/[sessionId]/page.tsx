@@ -1,14 +1,16 @@
 import Link from "next/link";
 
 import { sessionLifecycleAction } from "@/app/organizer/actions";
-import { OrganizerInventorySummary } from "@/components/holds/organizer-inventory-summary";
+import { RealtimeOrganizerInventory } from "@/components/holds/realtime-organizer-inventory";
 import { PricingSummary } from "@/components/organizer/pricing-summary";
 import { SeatMapRenderer } from "@/components/seat-maps/seat-map-renderer";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { ROUTES } from "@/config/site";
+import { getServerEnvironment } from "@/env/server";
 import { formatVenueDateTime } from "@/features/events/date-time";
+import { createRealtimeRoomTicket } from "@/features/inventory-events/room-ticket";
 import { hasMinimumMembershipRole } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
 import { requireEventSessionAccess } from "@/lib/event-authorization";
@@ -24,6 +26,8 @@ export default async function OrganizerSessionPage({ params, searchParams }: { p
   const inventorySummary = await getSessionInventorySummary(getDatabase(), scope.sessionId);
   const canManage = hasMinimumMembershipRole(membership.role, "ADMIN") && ["DRAFT", "PUBLISHED"].includes(event.status);
   const action = sessionLifecycleAction.bind(null, scope);
+  const realtimeTicket = createRealtimeRoomTicket({ sessionId: scope.sessionId, secret: getServerEnvironment().BETTER_AUTH_SECRET });
+  const realtimeUrl = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:3001";
 
   return <section className="bg-slate-50 py-12 sm:py-16"><Container className="max-w-[96rem]">
     <nav className="text-sm text-slate-500"><Link href={ROUTES.organizerEvent(scope.organizationSlug, scope.eventSlug)} className="hover:text-slate-950">{event.title}</Link> / Session</nav>
@@ -34,7 +38,7 @@ export default async function OrganizerSessionPage({ params, searchParams }: { p
     <div className="mt-8 grid gap-7 xl:grid-cols-[1fr_22rem]">
       <div className="min-w-0 space-y-7">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><div className="flex items-end justify-between"><div><h2 className="text-xl font-black text-slate-950">Pricing coverage</h2><p className="mt-1 text-sm text-slate-600">Blocked seats are excluded. Physical seat types do not assign prices automatically.</p></div><Link href={ROUTES.organizerSessionPricing(scope.organizationSlug, scope.eventSlug, scope.sessionId)} className={buttonStyles({ variant: "outline", size: "sm" })}>View pricing</Link></div><div className="mt-5"><PricingSummary tiers={coverage.tiers} totalSellable={coverage.totalSellable} pricedSellable={coverage.pricedSellable} unpricedSellable={coverage.unpricedSellable} /></div></section>
-        <OrganizerInventorySummary summary={inventorySummary} timeZone={eventSession.venue.timeZone} />
+        <RealtimeOrganizerInventory sessionId={scope.sessionId} organizationSlug={scope.organizationSlug} eventSlug={scope.eventSlug} initialSummary={inventorySummary} timeZone={eventSession.venue.timeZone} initialTicket={realtimeTicket} realtimeUrl={realtimeUrl} />
         <section><h2 className="mb-4 text-2xl font-black text-slate-950">Bound read-only seat map</h2><SeatMapRenderer sections={eventSession.seatMap.sections} /></section>
       </div>
       <aside className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm xl:sticky xl:top-24 xl:self-start"><h2 className="font-black text-slate-950">Publication readiness</h2>{issues.length === 0 ? <p className="mt-3 rounded-2xl bg-emerald-50 p-3 text-sm text-emerald-800">This session configuration passes capacity, coverage, ancestry, and pricing checks.</p> : <ul className="mt-3 space-y-2">{issues.map((issue) => <li key={issue} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{issue}</li>)}</ul>}

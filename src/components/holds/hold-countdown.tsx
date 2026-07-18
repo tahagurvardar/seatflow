@@ -21,23 +21,43 @@ export function HoldCountdown({
   expiresAt: string;
   className?: string;
 }) {
-  const router = useRouter();
-  const [remaining, setRemaining] = useState(() => secondsUntil(expiresAt));
+  const { refresh } = useRouter();
+  // Render a stable placeholder on the server and on the first client pass.
+  // Reading Date.now() during the state initializer can cross a second boundary
+  // between SSR and hydration, which makes the countdown text disagree.
+  const [remaining, setRemaining] = useState<number | null>(null);
   const refreshedRef = useRef(false);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    refreshedRef.current = false;
+
+    const update = () => {
       const next = secondsUntil(expiresAt);
       setRemaining(next);
       // When the informational timer reaches zero, ask the server to re-render
       // once so the authoritative expired state is shown.
       if (next <= 0 && !refreshedRef.current) {
         refreshedRef.current = true;
-        router.refresh();
+        refresh();
       }
-    }, 1000);
+    };
+
+    update();
+    const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [expiresAt, router]);
+  }, [expiresAt, refresh]);
+
+  if (remaining === null) {
+    return (
+      <span
+        role="timer"
+        aria-live="off"
+        className={cn("font-mono font-black tabular-nums", className)}
+      >
+        --:--
+      </span>
+    );
+  }
 
   if (remaining <= 0) {
     return (

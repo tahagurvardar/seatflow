@@ -53,14 +53,17 @@ Phase 3 deliberately has configured capacity rather than session inventory. It c
 
 Phase 4A deliberately keeps PostgreSQL as the sole source of truth. It has no Redis, BullMQ, WebSockets, Socket.IO, live seat delivery, booking, checkout, payment, ticket, or automatic worker scheduling.
 
-## Phase 4B — Availability delivery and operations (planned)
+## Phase 4B — Availability delivery and operations (complete)
 
-- Define Redis as a disposable projection/cache only after failure-mode and reconciliation design; PostgreSQL remains authoritative
-- Schedule durable execution of the existing idempotent expiry sweep with leaderless/concurrent-worker safety
-- Add real-time availability fan-out with session-scoped channels, authorization, reconnect, and snapshot/version recovery
-- Use a transactional outbox or equivalent post-commit publication so no database state change is lost
-- Measure hold conflicts, sweeper lag, expired-row recovery, projection drift, and reconnect load
-- Prove load, failover, replay, cache-loss, and stale-client behavior before operational rollout
+- PostgreSQL transactional outbox for every inventory mutation with bounded concurrent delivery
+- Durable Redis Streams invalidations with atomic event deduplication and environment-scoped keys
+- BullMQ repeat scheduling of the existing idempotent `SKIP LOCKED` PostgreSQL expiry sweep
+- Signed session-scoped Socket.IO rooms with strict safe payloads and connection limits
+- Authoritative refresh on invalidation/reconnect plus focus and low-frequency disconnected fallback
+- Customer selection reconciliation, aggregate-only organizer refresh, and protected operational health
+- PostgreSQL concurrency regression plus real Redis reconnect, isolation, outage/recovery, and multi-worker tests
+
+Phase 4B deliberately leaves every allocation decision in PostgreSQL and implements no booking, checkout, payment, order, ticket, QR code, refund, coupon, email, waitlist, dynamic pricing, or sales analytics.
 
 ## Phase 5 — Checkout, payments, bookings, and tickets
 

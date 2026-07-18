@@ -1,6 +1,10 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { getHoldConfiguration } from "@/features/holds/config";
 import { runInTransaction } from "@/server/database/run-in-transaction";
+import {
+  enqueueExpiredHoldEvents,
+} from "@/server/inventory-events/outbox-service";
+import { recordExpirySweep } from "@/server/operations/inventory-metrics";
 
 /**
  * Free the inventory currently pointed at a set of terminal holds. AVAILABLE is
@@ -49,6 +53,11 @@ export async function releaseExpiredHoldsForSession(
     expired.map((hold) => hold.id),
     now,
   );
+  await enqueueExpiredHoldEvents(transaction, {
+    sessionId,
+    holdIds: expired.map((hold) => hold.id),
+    now,
+  });
   return expired.length;
 }
 
@@ -100,6 +109,7 @@ export async function sweepExpiredHolds(
   database: PrismaClient,
   options: ExpirySweepOptions = {},
 ): Promise<ExpirySweepResult> {
+  const startedAt = performance.now();
   const now = options.now ?? new Date();
   const batchSize = options.batchSize ?? getHoldConfiguration().sweepBatchSize;
   const maxBatches = options.maxBatches ?? Number.POSITIVE_INFINITY;
@@ -107,11 +117,18 @@ export async function sweepExpiredHolds(
   let holdsExpired = 0;
   let seatsReleased = 0;
   let batches = 0;
+  const oldestOverdue = await database.seatHold.findFirst({
+    where: { status: "ACTIVE", expiresAt: { lte: now } },
+    orderBy: { expiresAt: "asc" },
+    select: { expiresAt: true },
+  });
 
   while (batches < maxBatches) {
     const processed = await runInTransaction(database, async (transaction) => {
-      const claimed = await transaction.$queryRaw<Array<{ id: string }>>`
-        SELECT "id"
+      const claimed = await transaction.$queryRaw<
+        Array<{ id: string; sessionId: string }>
+      >`
+        SELECT "id", "sessionId"
         FROM "SeatHold"
         WHERE "status" = 'ACTIVE' AND "expiresAt" <= ${now}
         ORDER BY "expiresAt" ASC
@@ -126,6 +143,13 @@ export async function sweepExpiredHolds(
         data: { status: "EXPIRED", expiredAt: now },
       });
       const seats = await releaseInventoryForHolds(transaction, ids, now);
+      for (const hold of claimed) {
+        await enqueueExpiredHoldEvents(transaction, {
+          sessionId: hold.sessionId,
+          holdIds: [hold.id],
+          now,
+        });
+      }
       return { holds: expired.count, seats };
     });
 
@@ -135,5 +159,12 @@ export async function sweepExpiredHolds(
     batches += 1;
   }
 
+  await recordExpirySweep(database, {
+    durationMs: performance.now() - startedAt,
+    lagMs: oldestOverdue
+      ? Math.max(0, now.getTime() - oldestOverdue.expiresAt.getTime())
+      : 0,
+    now,
+  });
   return { holdsExpired, seatsReleased, batches };
 }

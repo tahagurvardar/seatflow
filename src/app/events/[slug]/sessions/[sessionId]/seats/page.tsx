@@ -3,14 +3,15 @@ import { notFound } from "next/navigation";
 
 import { createHoldAction } from "@/app/customer/hold-actions";
 import { HoldCountdown } from "@/components/holds/hold-countdown";
-import { SeatSelectionPreview } from "@/components/holds/seat-selection-preview";
-import { SelectableSeatMap } from "@/components/holds/selectable-seat-map";
+import { RealtimeSeatSelection } from "@/components/holds/realtime-seat-selection";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { Container, Section } from "@/components/ui/container";
 import { Icon } from "@/components/ui/icon";
 import { ROUTES } from "@/config/site";
+import { getServerEnvironment } from "@/env/server";
 import { formatVenueDateTime } from "@/features/events/date-time";
+import { createRealtimeRoomTicket } from "@/features/inventory-events/room-ticket";
 import { getCurrentSession } from "@/lib/session";
 import { getDatabase } from "@/lib/database";
 import { getSeatSelectionView } from "@/server/holds/hold-queries";
@@ -37,6 +38,12 @@ export default async function SeatSelectionPage({ params }: SeatsPageProps) {
   const { eligibility, viewerActiveHold, viewerAuthenticated } = view;
   const canSelect =
     eligibility.sellable && viewerAuthenticated && !viewerActiveHold;
+  const realtimeTicket = createRealtimeRoomTicket({
+    sessionId,
+    secret: getServerEnvironment().BETTER_AUTH_SECRET,
+  });
+  const realtimeUrl =
+    process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:3001";
 
   return (
     <Section className="bg-slate-50">
@@ -63,24 +70,12 @@ export default async function SeatSelectionPage({ params }: SeatsPageProps) {
           <p className="mt-3 text-slate-300">
             {view.session.venueName} · {view.session.spaceName} · {view.session.city}
           </p>
-          <dl className="mt-6 grid gap-3 sm:grid-cols-3">
-            {[
-              ["Available", view.counts.available],
-              ["Held", view.counts.heldByYou + (view.counts.unavailable)],
-              ["Total seats", view.counts.total],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                <dt className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</dt>
-                <dd className="mt-1 text-2xl font-black">{value}</dd>
-              </div>
-            ))}
-          </dl>
         </header>
 
         <div className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900" role="note">
-          Availability is confirmed the moment your hold is created — this page is not a
-          live-synced view. If a seat is taken while you choose, SeatFlow will tell you and
-          keep the rest of your selection intact.
+          Live messages only signal that inventory changed. SeatFlow always reloads the
+          authoritative PostgreSQL snapshot, and PostgreSQL confirms availability again
+          when your hold is created.
         </div>
 
         {viewerActiveHold ? (
@@ -119,16 +114,17 @@ export default async function SeatSelectionPage({ params }: SeatsPageProps) {
         ) : null}
 
         <div className="mt-8">
-          {canSelect ? (
-            <SelectableSeatMap
-              sections={view.sections}
-              maxSeats={view.maxSeatsPerHold}
-              currency={view.currency}
-              action={createHoldAction.bind(null, { publicSlug: slug, sessionId })}
-            />
-          ) : (
-            <SeatSelectionPreview sections={view.sections} />
-          )}
+          <RealtimeSeatSelection
+            sessionId={sessionId}
+            eventSlug={slug}
+            initialSections={view.sections}
+            initialCounts={view.counts}
+            maxSeats={view.maxSeatsPerHold}
+            currency={view.currency}
+            action={canSelect ? createHoldAction.bind(null, { publicSlug: slug, sessionId }) : undefined}
+            initialTicket={realtimeTicket}
+            realtimeUrl={realtimeUrl}
+          />
         </div>
       </Container>
     </Section>
