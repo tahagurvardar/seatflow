@@ -1,67 +1,50 @@
 # SeatFlow product requirements
 
-## Purpose
+## Purpose and identity
 
-SeatFlow is an event-ticketing product focused on the journey from discovery to a verified digital ticket. It should make complex seat inventory feel calm and understandable while giving operators dependable control over events, sessions, venues, and sales.
+SeatFlow supports the journey from event discovery to a future verified digital ticket. Every authenticated user is a customer. Platform roles are `USER` and explicitly bootstrapped `ADMIN`; tenant capability comes independently from `OWNER`, `ADMIN`, or `MEMBER` memberships in `ORGANIZER` or `VENUE_OPERATOR` organizations.
 
-## Identity and audience model
+## Phase 3 delivered scope
 
-Every authenticated user is a **customer**. Customer capability is not an exclusive role and cannot be lost by joining an organization.
+- Organizer-owned persistent events in concert, cinema, theatre, sport, and other categories
+- One or more concrete sessions stored as UTC instants and rendered in venue-local time
+- Operator-controlled venue access grants; knowing a venue ID never grants scheduling access
+- Exact immutable published seat-map bindings and historical reference protection
+- Same-space overlap rejection with half-open time ranges: `[start, end)`
+- Integer-minor-unit session tiers in `AZN`, `EUR`, `GBP`, and `USD`
+- Section-level pricing and sellable/priced/unpriced capacity validation
+- Separate event/session publication and honest database-backed public discovery
+- Draft-only content, schedule, and pricing editing; controlled cancellation/archive/restore
+- Real operational counts without fake sales or revenue metrics
 
-Platform roles are intentionally limited to:
+OWNER and ADMIN members manage their authorized tenant resources. MEMBER users can inspect them but are read-only. All mutations re-authorize the current user and validate route context, nested ancestry, and lifecycle on the server.
 
-- `USER` — the default for every registration
-- `ADMIN` — an explicitly bootstrapped platform-governance privilege
+## Public visibility contract
 
-Tenant capability is independent from platform role. Users can hold multiple memberships in organizations of kind `ORGANIZER` or `VENUE_OPERATOR`. Each membership has one scoped role: `OWNER`, `ADMIN`, or `MEMBER`.
+An event is public only when the event is `PUBLISHED` and has a future, non-cancelled session in `SCHEDULED`, `ON_SALE`, or `SALES_PAUSED`. The session must have passed publication validation: active venue/space, immutable published map, positive sellable capacity, complete section pricing, one supported currency, valid windows, and no overlap. The catalogue shows the earliest eligible session and lowest configured tier price. Empty databases show an honest empty state.
 
-## Event scope
+## Lifecycle contract
 
-In scope for the eventual v1: concerts, cinema screenings, theatre performances, and sporting events.
+- Event content is editable in `DRAFT`; event publication and session publication are separate.
+- Session venue, space, map, times, and pricing are editable only in `DRAFT`.
+- Publication freezes the session configuration. Repeated publication is safe and idempotent.
+- Session cancellation and event cancellation preserve records; event cancellation cancels non-completed sessions.
+- An event can archive from draft, published, or cancelled state, but only an archived draft or published event can restore.
+- Only a securely authorized event with no sessions can be hard-deleted while still draft.
+- Revoking a venue grant blocks new sessions and draft publication while preserving published history.
 
-Out of scope: transportation ticketing, travel inventory, route planning, and vehicle seat reservations.
+## Pricing and capacity
 
-## Phase 2 scope
+Prices never use floating point. A tier stores a non-negative integer number of minor currency units. Zero-price tiers are intentionally allowed for complimentary admission. Every sellable section needs one tier; blocked seats remain physical seats but do not count as sellable or priced capacity. Physical seat type (`STANDARD`, `ACCESSIBLE`, `COMPANION`, or `PREMIUM`) does not automatically choose a commercial tier.
 
-Phase 2 delivers:
+## Explicit Phase 3 exclusions
 
-- PostgreSQL schema, migration history, and guarded development/test workflows
-- Better Auth email/password accounts and database-backed server sessions
-- server-owned platform roles and centralized authorization helpers
-- multi-organization membership modeling and minimum-role enforcement
-- protected customer, organizer, onboarding, and admin experiences
-- atomic organizer/OWNER onboarding with normalized unique slugs
-- real identity, membership, and platform-count displays
-- security-focused integration testing with a dedicated database
-- venue-operator onboarding with an explicit `VENUE_OPERATOR` organization
-- tenant-scoped venues and spaces with archive/restore lifecycles
-- versioned draft seat maps with sections, rows, seats, bulk generation, reordering, types, states, and coordinates
-- capacity summaries and a reusable coordinate-positioned read-only renderer
-- validated, atomic publication with immutable history and one current published version per space
-- atomic deep cloning from the current published version into the next server-assigned draft
-
-Phase 2 preserves the Phase 0 public information architecture and fixture catalogue. It does not pretend that persisted events, sessions, bookings, or ticket inventory exist.
-
-## Explicit Phase 2 exclusions
-
-Do not add persisted events or sessions, session inventory, pricing, holds, Redis, WebSockets, checkout, payments, bookings, coupons, refunds, QR tickets, scanning, email, analytics, or entry-control workflows during this phase.
-
-## Planned booking lifecycle
-
-1. A customer opens a published event.
-2. The customer chooses a concrete event session.
-3. The platform loads the seat map and current session inventory.
-4. The customer selects seats and requests a temporary hold.
-5. The server validates inventory and creates an expiring hold atomically.
-6. Checkout is created from the authoritative hold and price snapshot.
-7. A verified payment webhook confirms the booking idempotently.
-8. The platform converts held inventory to sold inventory and issues digital tickets.
-9. Customers retrieve tickets and authorized operators validate them at entry.
+There is no session inventory, seat availability, hold, reservation timer, Redis, WebSocket, booking, order, checkout, payment, webhook, ticket, QR code, email delivery, coupon, refund, sales analytics, waitlist, dynamic pricing, or per-seat price override. Public calls to action accurately state that booking starts in Phase 4 or later.
 
 ## Product quality requirements
 
-- Semantic, keyboard-accessible interfaces with visible focus states and sufficient contrast
-- Honest lifecycle language; unfinished capabilities never appear operational
-- Server Components by default and narrow client islands for necessary interaction
-- Authorization inside every server mutation and tenant-scoped data read
-- Strict TypeScript, validated boundaries, no exposed secrets, reproducible CI, and meaningful behavior tests
+- Semantic, keyboard-accessible interfaces with visible focus and responsive layouts
+- Server Components by default and narrow client islands where dependent input is needed
+- Authorization inside every protected read and mutation, not only in navigation
+- Central runtime validation, strict TypeScript, reproducible CI, and behavior-focused PostgreSQL tests
+- Honest lifecycle and availability wording; incomplete capabilities never appear operational

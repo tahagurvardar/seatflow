@@ -6,12 +6,12 @@ import {
   EVENT_CATEGORY_VALUES,
   type EventCategory,
 } from "@/config/site";
-import { events } from "@/data/events";
+import { getPublicEvents } from "@/server/events/public-event-service";
 
 export const metadata: Metadata = {
   title: "Discover Events",
   description:
-    "Browse SeatFlow's Phase 0 event catalogue across music, cinema, theatre, and sport.",
+    "Browse SeatFlow's published events and validated upcoming sessions across music, cinema, theatre, and sport.",
 };
 
 interface EventsPageProps {
@@ -28,6 +28,7 @@ function firstValue(value: string | string[] | undefined): string {
 
 export default async function EventsPage({ searchParams }: EventsPageProps) {
   const params = await searchParams;
+  const events = await getPublicEvents();
   const query = firstValue(params.q);
   const categoryParam = firstValue(params.category);
   const category = EVENT_CATEGORY_VALUES.includes(
@@ -52,8 +53,8 @@ export default async function EventsPage({ searchParams }: EventsPageProps) {
             Find something worth showing up for.
           </h1>
           <p className="mt-5 max-w-2xl text-base leading-7 text-slate-600">
-            Explore a curated mix of live music, cinema, theatre, and sport. Prices
-            and availability are representative Phase 0 catalogue data.
+            Explore database-backed published events and their earliest validated
+            upcoming sessions. Booking and seat holds are not available yet.
           </p>
         </Container>
       </section>

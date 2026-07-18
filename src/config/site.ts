@@ -19,6 +19,40 @@ export const ROUTES = {
   venueOperatorOnboarding: "/venue-operator/onboarding",
   admin: "/admin",
   eventDetail: (slug: string) => `/events/${slug}` as const,
+  organizerEvents: (organizationSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events` as const,
+  organizerNewEvent: (organizationSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/new` as const,
+  organizerEvent: (organizationSlug: string, eventSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}` as const,
+  organizerEventEdit: (organizationSlug: string, eventSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/edit` as const,
+  organizerEventSessions: (organizationSlug: string, eventSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions` as const,
+  organizerNewSession: (organizationSlug: string, eventSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/new` as const,
+  organizerSession: (
+    organizationSlug: string,
+    eventSlug: string,
+    sessionId: string,
+  ) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/${sessionId}` as const,
+  organizerSessionEdit: (
+    organizationSlug: string,
+    eventSlug: string,
+    sessionId: string,
+  ) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/${sessionId}/edit` as const,
+  organizerSessionPricing: (
+    organizationSlug: string,
+    eventSlug: string,
+    sessionId: string,
+  ) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/${sessionId}/pricing` as const,
+  organizerEventPreview: (organizationSlug: string, eventSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/preview` as const,
+  organizerApprovedVenues: (organizationSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/venues` as const,
   venueOperatorVenues: (organizationSlug: string) =>
     `/venue-operator/organizations/${organizationSlug}/venues` as const,
   venueOperatorNewVenue: (organizationSlug: string) =>
@@ -27,6 +61,8 @@ export const ROUTES = {
     `/venue-operator/organizations/${organizationSlug}/venues/${venueSlug}` as const,
   venueOperatorVenueEdit: (organizationSlug: string, venueSlug: string) =>
     `/venue-operator/organizations/${organizationSlug}/venues/${venueSlug}/edit` as const,
+  venueOperatorVenueAccess: (organizationSlug: string, venueSlug: string) =>
+    `/venue-operator/organizations/${organizationSlug}/venues/${venueSlug}/access` as const,
   venueOperatorNewSpace: (organizationSlug: string, venueSlug: string) =>
     `/venue-operator/organizations/${organizationSlug}/venues/${venueSlug}/spaces/new` as const,
   venueOperatorSpace: (organizationSlug: string, venueSlug: string, spaceSlug: string) =>
@@ -59,6 +95,7 @@ export const PROTECTED_ROUTES = [
   ROUTES.venueOperatorDashboard,
   ROUTES.venueOperatorOnboarding,
   "/venue-operator/organizations/[organizationSlug]/venues",
+  "/organizer/organizations/[organizationSlug]/events",
   ROUTES.admin,
 ] as const;
 
@@ -95,6 +132,7 @@ export const EVENT_CATEGORY_VALUES = [
   "cinema",
   "theatre",
   "sport",
+  "other",
 ] as const;
 
 export type EventCategory = (typeof EVENT_CATEGORY_VALUES)[number];
@@ -128,6 +166,12 @@ export const EVENT_CATEGORIES: ReadonlyArray<{
     label: "Sports",
     shortLabel: "Sport",
     description: "Big fixtures, close contests, and the energy of the crowd.",
+  },
+  {
+    id: "other",
+    label: "Other",
+    shortLabel: "Other",
+    description: "Talks, community programmes, and events beyond the core categories.",
   },
 ] as const;
 

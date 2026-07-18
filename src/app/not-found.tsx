@@ -20,8 +20,8 @@ export default function NotFound() {
             This seat isn’t on the map.
           </h1>
           <p className="mx-auto mt-5 max-w-lg text-base leading-7 text-slate-600">
-            The page may have moved, or the event slug may not exist in the current
-            Phase 0 catalogue.
+            The page may have moved, or this event has no publicly eligible
+            published session.
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
             <Link href={ROUTES.events} className={buttonStyles({ size: "lg" })}>

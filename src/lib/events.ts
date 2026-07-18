@@ -35,11 +35,11 @@ export function filterEvents(
 
   return [...filtered].sort((first, second) => {
     if (filters.sort === "price-asc") {
-      return first.minimumPrice - second.minimumPrice;
+      return first.minimumPriceMinor - second.minimumPriceMinor;
     }
 
     if (filters.sort === "price-desc") {
-      return second.minimumPrice - first.minimumPrice;
+      return second.minimumPriceMinor - first.minimumPriceMinor;
     }
 
     return Date.parse(first.startDate) - Date.parse(second.startDate);

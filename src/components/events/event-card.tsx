@@ -5,11 +5,8 @@ import { AvailabilityBadge } from "@/components/ui/badge";
 import { Icon } from "@/components/ui/icon";
 import { ROUTES } from "@/config/site";
 import type { Event } from "@/domain/event";
-import {
-  formatCurrency,
-  formatEventDate,
-  getDateBadge,
-} from "@/lib/formatters";
+import { formatMinorCurrency } from "@/features/events/money";
+import { formatEventDate, getDateBadge } from "@/lib/formatters";
 
 export function EventCard({
   event,
@@ -18,7 +15,7 @@ export function EventCard({
   event: Event;
   priority?: boolean;
 }) {
-  const dateBadge = getDateBadge(event.startDate);
+  const dateBadge = getDateBadge(event.startDate, event.timeZone);
 
   return (
     <article className="group flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_16px_50px_rgba(15,23,42,0.06)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(15,23,42,0.11)]">
@@ -67,7 +64,7 @@ export function EventCard({
           <div className="flex items-center gap-2">
             <Icon name="calendar" className="size-4 shrink-0 text-slate-400" />
             <dt className="sr-only">Date</dt>
-            <dd>{formatEventDate(event.startDate)}</dd>
+            <dd>{formatEventDate(event.startDate, event.timeZone)}</dd>
           </div>
           <div className="flex items-center gap-2">
             <Icon name="map-pin" className="size-4 shrink-0 text-slate-400" />
@@ -83,7 +80,7 @@ export function EventCard({
               From
             </p>
             <p className="mt-0.5 text-lg font-black text-slate-950">
-              {formatCurrency(event.minimumPrice, event.currency)}
+              {formatMinorCurrency(event.minimumPriceMinor, event.currency)}
             </p>
           </div>
           <span className="flex size-10 items-center justify-center rounded-full bg-slate-950 text-white transition group-hover:bg-orange-500">

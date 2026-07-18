@@ -7,6 +7,7 @@ import { buttonStyles } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { ROUTES } from "@/config/site";
 import { getUserMemberships, requireAuth } from "@/lib/authorization";
+import { getDatabase } from "@/lib/database";
 
 export const metadata: Metadata = {
   title: "Venue Operator Dashboard",
@@ -20,6 +21,12 @@ export default async function VenueOperatorDashboardPage() {
   );
 
   if (memberships.length === 0) redirect(ROUTES.venueOperatorOnboarding);
+  const organizationIds = memberships.map((membership) => membership.organizationId);
+  const [activeGrants, organizerCount, upcomingSessions] = await Promise.all([
+    getDatabase().venueAccessGrant.count({ where: { operatorOrganizationId: { in: organizationIds }, status: "ACTIVE" } }),
+    getDatabase().venueAccessGrant.findMany({ where: { operatorOrganizationId: { in: organizationIds }, status: "ACTIVE" }, distinct: ["organizerOrganizationId"], select: { organizerOrganizationId: true } }),
+    getDatabase().eventSession.count({ where: { venue: { organizationId: { in: organizationIds } }, startAt: { gt: new Date() }, status: { in: ["SCHEDULED", "ON_SALE", "SALES_PAUSED"] } } }),
+  ]);
 
   return (
     <section className="bg-slate-50 py-14 sm:py-20">
@@ -32,6 +39,8 @@ export default async function VenueOperatorDashboardPage() {
           </div>
           <Link href={ROUTES.venueOperatorOnboarding} className={buttonStyles({ variant: "outline", size: "sm" })}>Create organization</Link>
         </div>
+        <dl className="mt-8 grid gap-3 sm:grid-cols-3">{[["Active venue grants", activeGrants], ["Authorized organizers", organizerCount.length], ["Upcoming configured sessions", upcomingSessions]].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><dt className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-2 font-mono text-3xl font-black text-slate-950">{value}</dd></div>)}</dl>
+        <p className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">Booking and revenue data do not exist in Phase 3. Venue operators can see configured session timing but cannot edit organizer event content.</p>
         <div className="mt-9 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {memberships.map((membership) => (
             <article key={membership.id} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">

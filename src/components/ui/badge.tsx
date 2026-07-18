@@ -11,17 +11,13 @@ const availabilityContent: Record<
     label: "On sale",
     className: "bg-emerald-50 text-emerald-800 ring-emerald-600/15",
   },
-  limited: {
-    label: "Selling fast",
-    className: "bg-amber-50 text-amber-800 ring-amber-600/15",
-  },
-  "sold-out": {
-    label: "Sold out",
-    className: "bg-slate-100 text-slate-600 ring-slate-500/15",
-  },
-  "coming-soon": {
-    label: "Coming soon",
+  scheduled: {
+    label: "Scheduled",
     className: "bg-violet-50 text-violet-800 ring-violet-600/15",
+  },
+  "sales-paused": {
+    label: "Sales paused",
+    className: "bg-amber-50 text-amber-800 ring-amber-600/15",
   },
 };
 

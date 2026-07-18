@@ -62,6 +62,42 @@ enum SeatState {
   BLOCKED
 }
 
+enum VenueAccessGrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  ARCHIVED
+}
+
+enum EventCategory {
+  CONCERT
+  CINEMA
+  THEATRE
+  SPORT
+  OTHER
+}
+
+enum EventSessionStatus {
+  DRAFT
+  SCHEDULED
+  ON_SALE
+  SALES_PAUSED
+  CANCELLED
+  COMPLETED
+}
+
+enum Currency {
+  AZN
+  EUR
+  GBP
+  USD
+}
+
 model User {
   id            String       @id @default(cuid())
   name          String
@@ -72,9 +108,11 @@ model User {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  accounts    Account[]
-  sessions    Session[]
-  memberships Membership[]
+  accounts                 Account[]
+  sessions                 Session[]
+  memberships              Membership[]
+  venueAccessGrantsGranted VenueAccessGrant[] @relation("VenueAccessGrantedBy")
+  venueAccessGrantsRevoked VenueAccessGrant[] @relation("VenueAccessRevokedBy")
 }
 
 model Account {
@@ -134,8 +172,11 @@ model Organization {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 
-  memberships Membership[]
-  venues      Venue[]
+  memberships                Membership[]
+  venues                     Venue[]
+  events                     Event[]            @relation("OrganizerEvents")
+  organizerVenueAccessGrants VenueAccessGrant[] @relation("OrganizerVenueAccess")
+  operatorVenueAccessGrants  VenueAccessGrant[] @relation("OperatorVenueAccess")
 
   @@index([kind])
 }
@@ -173,8 +214,10 @@ model Venue {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  spaces       Space[]
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  spaces        Space[]
+  accessGrants  VenueAccessGrant[]
+  eventSessions EventSession[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
@@ -193,8 +236,9 @@ model Space {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
-  venue    Venue     @relation(fields: [venueId], references: [id], onDelete: Restrict)
-  seatMaps SeatMap[]
+  venue         Venue          @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  seatMaps      SeatMap[]
+  eventSessions EventSession[]
 
   @@unique([venueId, slug])
   @@index([venueId, status])
@@ -212,10 +256,11 @@ model SeatMap {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  space         Space         @relation(fields: [spaceId], references: [id], onDelete: Restrict)
-  sourceSeatMap SeatMap?      @relation("SeatMapSource", fields: [sourceSeatMapId], references: [id], onDelete: SetNull)
-  clones        SeatMap[]     @relation("SeatMapSource")
+  space         Space          @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  sourceSeatMap SeatMap?       @relation("SeatMapSource", fields: [sourceSeatMapId], references: [id], onDelete: SetNull)
+  clones        SeatMap[]      @relation("SeatMapSource")
   sections      SeatSection[]
+  eventSessions EventSession[]
 
   @@unique([spaceId, version])
   @@index([spaceId, status])
@@ -231,8 +276,9 @@ model SeatSection {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  seatMap SeatMap   @relation(fields: [seatMapId], references: [id], onDelete: Cascade)
-  rows    SeatRow[]
+  seatMap                   SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Cascade)
+  rows                      SeatRow[]
+  sessionPricingAssignments SessionSectionPricing[]
 
   @@unique([seatMapId, code])
   @@index([seatMapId, displayOrder])
@@ -270,4 +316,125 @@ model Seat {
   @@unique([rowId, label])
   @@index([rowId, displayOrder])
   @@index([type, state])
+}
+
+model VenueAccessGrant {
+  id                      String                 @id @default(cuid())
+  organizerOrganizationId String
+  operatorOrganizationId  String
+  venueId                 String
+  status                  VenueAccessGrantStatus @default(ACTIVE)
+  grantedByUserId         String?
+  revokedByUserId         String?
+  createdAt               DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @db.Timestamptz(3)
+  revokedAt               DateTime?              @db.Timestamptz(3)
+
+  organizerOrganization Organization @relation("OrganizerVenueAccess", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
+  operatorOrganization  Organization @relation("OperatorVenueAccess", fields: [operatorOrganizationId], references: [id], onDelete: Restrict)
+  venue                 Venue        @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  grantedByUser         User?        @relation("VenueAccessGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  revokedByUser         User?        @relation("VenueAccessRevokedBy", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizerOrganizationId, status])
+  @@index([operatorOrganizationId, status])
+  @@index([venueId, status])
+  @@index([grantedByUserId])
+  @@index([revokedByUserId])
+}
+
+model Event {
+  id                      String        @id @default(cuid())
+  organizerOrganizationId String
+  title                   String
+  slug                    String
+  publicSlug              String        @unique
+  shortDescription        String
+  description             String
+  category                EventCategory
+  imagePath               String?
+  status                  EventStatus   @default(DRAFT)
+  preArchiveStatus        EventStatus?
+  createdAt               DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime      @updatedAt @db.Timestamptz(3)
+  publishedAt             DateTime?     @db.Timestamptz(3)
+  cancelledAt             DateTime?     @db.Timestamptz(3)
+  archivedAt              DateTime?     @db.Timestamptz(3)
+
+  organizerOrganization Organization   @relation("OrganizerEvents", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
+  sessions              EventSession[]
+
+  @@unique([organizerOrganizationId, slug])
+  @@index([organizerOrganizationId, status])
+  @@index([organizerOrganizationId, createdAt])
+  @@index([status, publishedAt])
+  @@index([category, status])
+}
+
+model EventSession {
+  id           String             @id @default(cuid())
+  eventId      String
+  venueId      String
+  spaceId      String
+  seatMapId    String
+  startAt      DateTime           @db.Timestamptz(3)
+  endAt        DateTime           @db.Timestamptz(3)
+  salesStartAt DateTime           @db.Timestamptz(3)
+  salesEndAt   DateTime           @db.Timestamptz(3)
+  status       EventSessionStatus @default(DRAFT)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime           @updatedAt @db.Timestamptz(3)
+  publishedAt  DateTime?          @db.Timestamptz(3)
+  cancelledAt  DateTime?          @db.Timestamptz(3)
+
+  event          Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  venue          Venue                   @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  space          Space                   @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  seatMap        SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
+  priceTiers     SessionPriceTier[]
+  sectionPricing SessionSectionPricing[]
+
+  @@index([eventId, status])
+  @@index([eventId, startAt])
+  @@index([venueId, startAt])
+  @@index([spaceId, startAt, endAt])
+  @@index([seatMapId])
+  @@index([status, startAt])
+}
+
+model SessionPriceTier {
+  id           String   @id @default(cuid())
+  sessionId    String
+  name         String
+  code         String
+  priceMinor   Int
+  currency     Currency
+  displayOrder Int
+  description  String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  session            EventSession            @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  sectionAssignments SessionSectionPricing[]
+
+  @@unique([sessionId, code])
+  @@index([sessionId, displayOrder])
+  @@index([sessionId, currency])
+}
+
+model SessionSectionPricing {
+  id          String   @id @default(cuid())
+  sessionId   String
+  sectionId   String
+  priceTierId String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  session   EventSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  section   SeatSection      @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier SessionPriceTier @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, sectionId])
+  @@index([sessionId])
+  @@index([sectionId])
+  @@index([priceTierId])
 }

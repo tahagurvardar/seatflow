@@ -12,21 +12,21 @@ import { buttonStyles } from "@/components/ui/button";
 import { Container, Section } from "@/components/ui/container";
 import { Icon } from "@/components/ui/icon";
 import { ROUTES } from "@/config/site";
-import { events } from "@/data/events";
+import { getPublicEvents } from "@/server/events/public-event-service";
 
-export default function HomePage() {
-  const featuredEvents = events.filter((event) => event.featured).slice(0, 3);
+export default async function HomePage() {
+  const featuredEvents = (await getPublicEvents()).slice(0, 3);
 
   return (
     <>
-      <HeroSection />
+      <HeroSection events={featuredEvents} />
 
       <Section>
         <Container>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-600">
-                Curated for right now
+                Published and upcoming
               </p>
               <h2 className="mt-3 text-3xl font-black tracking-[-0.045em] text-slate-950 sm:text-4xl">
                 Featured events
@@ -48,6 +48,11 @@ export default function HomePage() {
             {featuredEvents.map((event) => (
               <EventCard key={event.id} event={event} />
             ))}
+            {featuredEvents.length === 0 ? (
+              <p className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-sm leading-6 text-slate-600 sm:col-span-2 lg:col-span-3">
+                No public events are available yet. This catalogue is database-backed and does not substitute mock listings.
+              </p>
+            ) : null}
           </div>
         </Container>
       </Section>

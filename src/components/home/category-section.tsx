@@ -12,6 +12,7 @@ const categoryPresentation: Record<
   cinema: { icon: "film", className: "bg-cyan-100 text-cyan-700" },
   theatre: { icon: "stage", className: "bg-violet-100 text-violet-700" },
   sport: { icon: "sport", className: "bg-lime-100 text-lime-800" },
+  other: { icon: "sparkles", className: "bg-slate-200 text-slate-700" },
 };
 
 export function CategorySection() {
@@ -28,11 +29,11 @@ export function CategorySection() {
             </h2>
           </div>
           <p className="max-w-md text-sm leading-6 text-slate-600">
-            Four ways to spend a great night. Transportation ticketing is outside
+            Five ways to spend a great night. Transportation ticketing is outside
             SeatFlow’s v1 scope.
           </p>
         </div>
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {EVENT_CATEGORIES.map((category) => {
             const presentation = categoryPresentation[category.id];
             return (

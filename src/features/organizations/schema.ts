@@ -13,6 +13,23 @@ export const organizationOnboardingSchema = z.object({
     ),
 });
 
+export const organizationSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(2, "Enter an organizer organization slug.")
+  .max(64, "Enter no more than 64 characters.")
+  .regex(
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+    "Use lowercase letters, numbers, and single hyphens.",
+  );
+
+export const venueAccessRevocationSchema = z.object({
+  confirmation: z.literal("revoke", {
+    error: "Confirm revocation before continuing.",
+  }),
+});
+
 export function createOrganizationSlug(name: string) {
   const normalized = name
     .normalize("NFKD")

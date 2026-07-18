@@ -5,13 +5,13 @@ import { redirect } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
-import { EmptyState } from "@/components/ui/empty-state";
 import { ROUTES } from "@/config/site";
 import {
   getUserMemberships,
   requireAuth,
   requireOrganizationMembership,
 } from "@/lib/authorization";
+import { getDatabase } from "@/lib/database";
 
 export const metadata: Metadata = {
   title: "Organizer Dashboard",
@@ -46,6 +46,15 @@ export default async function OrganizerDashboardPage({
       minimumRole: "MEMBER",
       redirectPath: `${ROUTES.organizerDashboard}?organization=${encodeURIComponent(selectedSlug)}`,
     });
+  const organizationId = selectedMembership.organizationId;
+  const [eventCount, draftEvents, publishedEvents, upcomingSessions, cancelledSessions, approvedVenues] = await Promise.all([
+    getDatabase().event.count({ where: { organizerOrganizationId: organizationId } }),
+    getDatabase().event.count({ where: { organizerOrganizationId: organizationId, status: "DRAFT" } }),
+    getDatabase().event.count({ where: { organizerOrganizationId: organizationId, status: "PUBLISHED" } }),
+    getDatabase().eventSession.count({ where: { event: { organizerOrganizationId: organizationId }, startAt: { gt: new Date() }, status: { not: "CANCELLED" } } }),
+    getDatabase().eventSession.count({ where: { event: { organizerOrganizationId: organizationId }, status: "CANCELLED" } }),
+    getDatabase().venueAccessGrant.count({ where: { organizerOrganizationId: organizationId, status: "ACTIVE", venue: { status: "ACTIVE" } } }),
+  ]);
 
   return (
     <section className="bg-slate-50 py-14 sm:py-20">
@@ -103,41 +112,8 @@ export default async function OrganizerDashboardPage({
           </div>
         ) : null}
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-[0.75fr_1.25fr]">
-          <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-orange-600">
-              Workspace identity
-            </p>
-            <dl className="mt-6 grid gap-5">
-              <div>
-                <dt className="text-xs font-semibold text-slate-500">Slug</dt>
-                <dd className="mt-1 font-mono text-sm font-bold text-slate-950">
-                  {selectedMembership.organization.slug}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs font-semibold text-slate-500">Kind</dt>
-                <dd className="mt-1 font-bold text-slate-950">
-                  {selectedMembership.organization.kind}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs font-semibold text-slate-500">
-                  Your membership
-                </dt>
-                <dd className="mt-1 font-bold text-slate-950">
-                  {selectedMembership.role}
-                </dd>
-              </div>
-            </dl>
-          </article>
-
-          <EmptyState
-            icon="calendar"
-            title="Event management begins in Phase 3"
-            description="This is a real protected organizer workspace. Persistent events, sessions, pricing, and inventory are deliberately deferred; Phase 2 venue layouts live in separate venue-operator tenants."
-          />
-        </div>
+        <dl className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{[["Events", eventCount], ["Draft events", draftEvents], ["Published events", publishedEvents], ["Upcoming sessions", upcomingSessions], ["Cancelled sessions", cancelledSessions], ["Approved venues", approvedVenues]].map(([label, value]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><dt className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-2 font-mono text-3xl font-black text-slate-950">{value}</dd></div>)}</dl>
+        <div className="mt-6 flex flex-wrap gap-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><Link href={ROUTES.organizerEvents(selectedMembership.organization.slug)} className={buttonStyles()}>Manage events</Link><Link href={ROUTES.organizerApprovedVenues(selectedMembership.organization.slug)} className={buttonStyles({ variant: "outline" })}>Review approved venues</Link><p className="basis-full text-sm text-slate-600">Booking, ticket sales, and revenue metrics are intentionally unavailable in Phase 3.</p></div>
       </Container>
     </section>
   );

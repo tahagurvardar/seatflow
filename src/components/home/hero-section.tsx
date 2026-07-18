@@ -4,12 +4,11 @@ import { buttonStyles } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { Icon } from "@/components/ui/icon";
 import { ROUTES } from "@/config/site";
-import { events } from "@/data/events";
+import type { Event } from "@/domain/event";
 import { formatEventDate } from "@/lib/formatters";
 
-const heroEvents = events.filter((event) => event.featured).slice(0, 3);
-
-export function HeroSection() {
+export function HeroSection({ events }: { events: readonly Event[] }) {
+  const heroEvents = events.slice(0, 3);
   return (
     <section className="relative overflow-hidden bg-slate-950 text-white">
       <div
@@ -104,7 +103,7 @@ export function HeroSection() {
               </span>
             </div>
             <div className="mt-2 divide-y divide-white/10">
-              {heroEvents.map((event, index) => (
+              {heroEvents.length > 0 ? heroEvents.map((event, index) => (
                 <Link
                   key={event.id}
                   href={ROUTES.eventDetail(event.slug)}
@@ -126,7 +125,7 @@ export function HeroSection() {
                       {event.title}
                     </span>
                     <span className="mt-1 block text-xs text-slate-400">
-                      {formatEventDate(event.startDate)} · {event.city}
+                      {formatEventDate(event.startDate, event.timeZone)} · {event.city}
                     </span>
                   </span>
                   <Icon
@@ -134,7 +133,11 @@ export function HeroSection() {
                     className="size-4 text-slate-500 transition group-hover:text-white"
                   />
                 </Link>
-              ))}
+              )) : (
+                <p className="py-8 text-sm leading-6 text-slate-400">
+                  No published sessions are available yet. Organizer listings will appear here after validation and publication.
+                </p>
+              )}
             </div>
             <Link
               href={ROUTES.events}

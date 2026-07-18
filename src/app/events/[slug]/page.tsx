@@ -4,38 +4,33 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { EventCard } from "@/components/events/event-card";
+import { SeatMapRenderer } from "@/components/seat-maps/seat-map-renderer";
 import { AvailabilityBadge, Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { Container, Section } from "@/components/ui/container";
 import { Icon } from "@/components/ui/icon";
 import { ROUTES, SITE_CONFIG } from "@/config/site";
-import { events } from "@/data/events";
+import { formatVenueDateTime } from "@/features/events/date-time";
+import { formatMinorCurrency } from "@/features/events/money";
+import { getRelatedEvents } from "@/lib/events";
 import {
-  formatCurrency,
-  formatEventDate,
-  formatEventTime,
-} from "@/lib/formatters";
-import { getEventBySlug, getRelatedEvents } from "@/lib/events";
+  getPublicEventBySlug,
+  getPublicEvents,
+} from "@/server/events/public-event-service";
 
 interface EventDetailPageProps {
   params: Promise<{ slug: string }>;
 }
 
-export const dynamicParams = false;
-
-export function generateStaticParams() {
-  return events.map((event) => ({ slug: event.slug }));
-}
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({
   params,
 }: EventDetailPageProps): Promise<Metadata> {
   const { slug } = await params;
-  const event = getEventBySlug(slug, events);
+  const event = await getPublicEventBySlug(slug);
 
-  if (!event) {
-    return { title: "Event not found" };
-  }
+  if (!event) return { title: "Event not found" };
 
   return {
     title: event.title,
@@ -50,13 +45,15 @@ export async function generateMetadata({
 
 export default async function EventDetailPage({ params }: EventDetailPageProps) {
   const { slug } = await params;
-  const event = getEventBySlug(slug, events);
+  const [event, allEvents] = await Promise.all([
+    getPublicEventBySlug(slug),
+    getPublicEvents(),
+  ]);
+  if (!event) notFound();
 
-  if (!event) {
-    notFound();
-  }
-
-  const relatedEvents = getRelatedEvents(event, events);
+  const firstSession = event.sessions[0];
+  if (!firstSession) notFound();
+  const relatedEvents = getRelatedEvents(event, allEvents);
 
   return (
     <>
@@ -86,10 +83,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 <Icon name="calendar" className="mt-0.5 size-5 shrink-0 text-orange-400" />
                 <div>
                   <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Date & time
+                    Next session
                   </dt>
                   <dd className="mt-1 font-semibold text-white">
-                    {formatEventDate(event.startDate)} · {formatEventTime(event.startDate)}
+                    {formatVenueDateTime(firstSession.startDate, firstSession.timeZone)}
                   </dd>
                 </div>
               </div>
@@ -97,10 +94,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 <Icon name="map-pin" className="mt-0.5 size-5 shrink-0 text-orange-400" />
                 <div>
                   <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Venue
+                    Venue and space
                   </dt>
                   <dd className="mt-1 font-semibold text-white">
-                    {event.venue}, {event.city}
+                    {event.venue} · {event.space}, {event.city}
                   </dd>
                 </div>
               </div>
@@ -128,59 +125,65 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               About this event
             </p>
             <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-slate-950">
-              An evening built to stay with you.
+              Published by {event.organizer}
             </h2>
-            <p className="mt-6 max-w-3xl text-base leading-8 text-slate-600">
+            <p className="mt-6 max-w-3xl whitespace-pre-line text-base leading-8 text-slate-600">
               {event.description}
             </p>
 
-            <dl className="mt-10 grid gap-px overflow-hidden rounded-3xl border border-slate-200 bg-slate-200 sm:grid-cols-2">
-              <div className="bg-white p-6">
-                <dt className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Presented by
-                </dt>
-                <dd className="mt-2 font-bold text-slate-950">{event.organizer}</dd>
+            <section className="mt-12" aria-labelledby="sessions-heading">
+              <h2 id="sessions-heading" className="text-2xl font-black text-slate-950">
+                Upcoming sessions
+              </h2>
+              <div className="mt-5 space-y-4">
+                {event.sessions.map((session) => (
+                  <article key={session.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="font-bold text-slate-950">
+                          {formatVenueDateTime(session.startDate, session.timeZone)}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {session.venue} · {session.space} · {session.city}
+                        </p>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {session.sellableCapacity} configured sellable seats · exact map v{session.seatMap.version}
+                        </p>
+                      </div>
+                      <div className="sm:text-right">
+                        <AvailabilityBadge status={session.availability} />
+                        <p className="mt-2 font-black text-slate-950">
+                          From {formatMinorCurrency(session.minimumPriceMinor, session.currency)}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+                ))}
               </div>
-              <div className="bg-white p-6">
-                <dt className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Location
-                </dt>
-                <dd className="mt-2 font-bold text-slate-950">
-                  {event.city}, {event.country}
-                </dd>
-              </div>
-            </dl>
+            </section>
           </article>
 
           <aside className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-950/5 lg:sticky lg:top-24">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Tickets from
+              Configured from
             </p>
             <p className="mt-2 text-3xl font-black tracking-tight text-slate-950">
-              {formatCurrency(event.minimumPrice, event.currency)}
+              {formatMinorCurrency(event.minimumPriceMinor, event.currency)}
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Final pricing will depend on session, seat, and fees once booking is
-              introduced.
+              Prices and section coverage are persisted. Availability counts, holds, and checkout begin in Phase 4 or later.
             </p>
             <button
               type="button"
               disabled
               aria-describedby="seat-selection-note"
-              className={buttonStyles({
-                size: "lg",
-                className: "mt-6 w-full",
-              })}
+              className={buttonStyles({ size: "lg", className: "mt-6 w-full" })}
             >
               <Icon name="ticket" className="size-4" />
-              Seat selection — future phase
+              Booking unavailable
             </button>
-            <div
-              id="seat-selection-note"
-              className="mt-4 rounded-2xl bg-amber-50 p-4 text-xs leading-5 text-amber-900"
-            >
-              Booking is intentionally unavailable in this foundation. No seats
-              are being held and no payment will be taken.
+            <div id="seat-selection-note" className="mt-4 rounded-2xl bg-amber-50 p-4 text-xs leading-5 text-amber-900">
+              No seats are being held and no payment will be taken in Phase 3.
             </div>
           </aside>
         </Container>
@@ -188,29 +191,37 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
 
       <Section className="border-t border-slate-200 bg-white">
         <Container>
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-600">
-                Keep exploring
-              </p>
-              <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-slate-950">
-                You might also like
-              </h2>
-            </div>
-            <Link
-              href={ROUTES.events}
-              className={buttonStyles({ variant: "ghost", size: "sm" })}
-            >
-              All events <Icon name="arrow-right" className="size-4" />
-            </Link>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-orange-600">
+              Read-only layout
+            </p>
+            <h2 className="mt-3 text-3xl font-black tracking-[-0.04em] text-slate-950">
+              {firstSession.seatMap.name} · version {firstSession.seatMap.version}
+            </h2>
+            <p className="mt-3 text-sm text-slate-600">
+              This is the immutable published map bound to the next session. It is a preview, not a seat picker.
+            </p>
           </div>
-          <div className="mt-9 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {relatedEvents.map((relatedEvent) => (
-              <EventCard key={relatedEvent.id} event={relatedEvent} />
-            ))}
+          <div className="mt-8">
+            <SeatMapRenderer sections={firstSession.seatMap.sections} />
           </div>
         </Container>
       </Section>
+
+      {relatedEvents.length > 0 ? (
+        <Section className="border-t border-slate-200">
+          <Container>
+            <h2 className="text-3xl font-black tracking-[-0.04em] text-slate-950">
+              You might also like
+            </h2>
+            <div className="mt-9 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {relatedEvents.map((relatedEvent) => (
+                <EventCard key={relatedEvent.id} event={relatedEvent} />
+              ))}
+            </div>
+          </Container>
+        </Section>
+      ) : null}
     </>
   );
 }

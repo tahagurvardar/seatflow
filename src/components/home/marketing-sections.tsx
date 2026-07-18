@@ -25,8 +25,8 @@ const steps: ReadonlyArray<{
   },
   {
     number: "03",
-    title: "Pick your place",
-    description: "Interactive seat selection and secure checkout arrive in later phases.",
+    title: "Preview the room",
+    description: "Review the configured section layout; seat selection and checkout arrive in later phases.",
     icon: "ticket",
   },
 ];
@@ -85,9 +85,9 @@ export function OrganizerSection() {
               Put the experience first. We’ll build the operations around it.
             </h2>
             <p className="mt-5 max-w-xl text-sm leading-6 text-orange-50 sm:text-base">
-              Venue-operator workspaces and versioned seat maps now establish the
-              physical layout foundation. Persisted events, sessions, pricing,
-              reporting, and team tools remain on the roadmap.
+              Publish persistent events and priced sessions against venues that
+              have explicitly approved your organization. Booking, payments,
+              reporting, and team invitations remain on the roadmap.
             </p>
           </div>
           <div className="relative mt-8 lg:mt-0">
@@ -99,7 +99,7 @@ export function OrganizerSection() {
                 className: "border-white bg-white text-slate-950 hover:bg-orange-50",
               })}
             >
-              Preview organizer foundation
+              Open organizer workspace
               <Icon name="arrow-right" className="size-4" />
             </Link>
           </div>

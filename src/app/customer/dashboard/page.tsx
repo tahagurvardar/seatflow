@@ -133,7 +133,7 @@ export default async function CustomerDashboardPage() {
           <EmptyState
             icon="ticket"
             title="Booking data starts in a later phase"
-            description="Phase 2 adds venue layouts for authorized operators, but customer bookings and tickets remain deliberately deferred. No fake purchase data is shown here."
+            description="Phase 3 adds persisted events, configured sessions, and section pricing, but customer bookings and tickets remain deliberately deferred. No fake purchase data is shown here."
             action={
               <Link href={ROUTES.events} className={buttonStyles({ size: "sm" })}>
                 Explore the public catalogue

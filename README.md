@@ -1,64 +1,59 @@
 # SeatFlow
 
-SeatFlow is a production-oriented event-ticketing portfolio project. The current repository contains **Phase 2: Venue management and versioned seat maps** on top of the Phase 0 public discovery and Phase 1 identity foundations.
+SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 3: persistent events, sessions, venue access, and section pricing**, built on the Phase 0 discovery, Phase 1 identity, and Phase 2 venue/seat-map foundations.
 
-All authenticated users are customers. Platform privilege is deliberately narrow (`USER` or `ADMIN`), while organizer and venue-operator capability comes from per-organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
+Every authenticated user remains a customer. Platform privilege is deliberately narrow (`USER` or `ADMIN`); organizer and venue-operator capability comes from organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
 
 ## What is implemented
 
-- Phase 0 landing page, event catalogue, event detail routes, responsive shell, and typed local fixtures
-- PostgreSQL persistence through Prisma 7 and its PostgreSQL driver adapter
-- Better Auth email/password registration, login, logout, and database-backed server sessions
-- Server-owned platform roles; registration cannot submit or promote a role
-- Multi-tenant organizations (`ORGANIZER` or `VENUE_OPERATOR`) and indexed memberships
-- Protected customer, organizer, onboarding, and platform-admin routes
-- Atomic organizer creation with an OWNER membership and duplicate-slug handling
-- Venue-operator onboarding with an explicit `VENUE_OPERATOR` tenant and OWNER membership
-- Tenant-scoped venue and space CRUD with draft/active/archive lifecycles
-- Versioned draft seat maps with sections, rows, seats, bounded visual bulk-generation previews, coordinate-positioned canvases, reordering, seat types, and blocked states
-- Physical, sellable, blocked, and per-type capacity summaries on maps and the space's current published configuration
-- Atomic publication that archives the prior current version and makes the new snapshot immutable
-- Atomic deep cloning from the current published map into the next server-assigned draft version
-- PostgreSQL partial uniqueness, lifecycle checks, ownership/kind invariants, restrictive foreign keys, clone-provenance checks, and immutability triggers
-- Server-rendered account navigation without an authentication flash
-- Validated environment boundaries and an isolated, guarded integration-test database
-- Unit/component tests plus security-focused PostgreSQL integration tests in CI
+- PostgreSQL and Prisma persistence with Better Auth email/password sessions
+- Multi-tenant `ORGANIZER` and `VENUE_OPERATOR` organizations with scoped memberships
+- Tenant-owned venues, active spaces, and immutable versioned published seat maps
+- Organizer-owned persistent events with normalized organizer-scoped slugs and public composite slugs
+- Separate event and session publication lifecycles with cancellation, archive, restore, and history preservation
+- Append-only venue access grants controlled by venue-operator OWNER/ADMIN members
+- UTC session instants displayed in each venue's IANA time zone
+- Exact published seat-map binding that cannot be silently replaced after publication
+- PostgreSQL overlap exclusion for non-cancelled sessions in one space; exact end/start boundaries are allowed
+- Session price tiers stored as integer minor units in centrally supported currencies
+- One section-level price assignment per session/map section, with sellable, priced, unpriced, and tier capacity summaries
+- Atomic publication validation for access, ancestry, dates, capacity, pricing coverage, currency, and conflicts
+- Database-backed public catalogue, featured content, and true event-detail 404 behavior with no mock fallback
+- Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
+- Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Phase 2 intentionally does **not** add persisted events or sessions, session inventory, pricing, holds, Redis, WebSockets, bookings, checkout, payments, refunds, coupons, QR tickets, scanning, email, analytics, or entry-control workflows.
+Phase 3 does **not** implement inventory, seat holds, Redis, WebSockets, bookings, orders, checkout, payments, tickets, QR codes, refunds, coupons, dynamic pricing, waitlists, email, or sales analytics.
 
-## Routes
+## Main routes
 
 | Route | Access and purpose |
 | --- | --- |
-| `/` | Public marketing landing page |
-| `/events` | Public filterable event catalogue backed by Phase 0 fixtures |
-| `/events/[slug]` | Public event detail; future booking CTA remains disabled |
-| `/login` | Better Auth email/password sign-in |
-| `/register` | Customer registration; always creates a `USER` |
-| `/customer/dashboard` | Any authenticated user; real identity and memberships |
-| `/organizer/dashboard` | Members of an `ORGANIZER` tenant; deterministic tenant selection |
-| `/organizer/onboarding` | Authenticated organization creation and OWNER assignment |
-| `/venue-operator/onboarding` | Authenticated venue-operator creation and OWNER assignment |
-| `/venue-operator/dashboard` | Select an authorized venue-operator tenant |
-| `/venue-operator/organizations/[organizationSlug]/venues` | Tenant-scoped venue list and creation entry point |
-| `/venue-operator/organizations/[organizationSlug]/venues/[venueSlug]` | Venue details, spaces, and archive lifecycle |
-| `.../spaces/[spaceSlug]` | Space details and seat-map version history |
-| `.../seat-maps/[version]` | Draft editor or immutable read-only preview |
-| `/admin` | Platform `ADMIN` only; real identity/tenant counts |
-| `/api/auth/[...all]` | Better Auth route handler |
+| `/`, `/events`, `/events/[slug]` | Database-backed public discovery and read-only event/session detail |
+| `/login`, `/register` | Better Auth identity flows |
+| `/customer/dashboard` | Authenticated identity and membership summary |
+| `/organizer/dashboard` | Organizer tenant selection and real Phase 3 counts |
+| `/organizer/organizations/[organizationSlug]/events` | Organizer event list and management entry point |
+| `.../events/new`, `.../events/[eventSlug]/edit` | Authorized draft event creation/editing |
+| `.../events/[eventSlug]/sessions/new` | Session creation from approved venues and published maps |
+| `.../sessions/[sessionId]` | Session lifecycle, coverage, and bound-map preview |
+| `.../sessions/[sessionId]/pricing` | Draft tier and section-pricing configuration |
+| `.../events/[eventSlug]/preview` | Organizer publication preview |
+| `/organizer/organizations/[organizationSlug]/venues` | Approved venue/space/published-map information |
+| `/venue-operator/dashboard` | Operator tenant selection and Phase 3 grant/session counts |
+| `/venue-operator/organizations/[organizationSlug]/venues` | Tenant-scoped venue management |
+| `.../venues/[venueSlug]/access` | Grant and revoke organizer venue access |
+| `.../spaces/[spaceSlug]/seat-maps/[version]` | Draft editor or immutable map preview |
+| `/admin` | Platform `ADMIN` only |
+| `/api/auth/[...all]` | Better Auth handler |
 
 ## Local setup
 
-Requirements: Node.js 22.12 or newer, npm, and PostgreSQL.
-
-Create two different databases. The test command resets its target, so never point `TEST_DATABASE_URL` at a development or production database.
+Requirements: Node.js 22.12 or newer, npm, and PostgreSQL. Create separate development and test databases; the integration command resets its target.
 
 ```sql
 CREATE DATABASE seatflow;
 CREATE DATABASE seatflow_test;
 ```
-
-Then install, configure, and migrate:
 
 ```powershell
 npm ci
@@ -67,11 +62,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Environment parsing fails with a field-specific message when a required runtime value is missing or malformed.
-
-`DIRECT_URL` is used by Prisma migrations. It can match `DATABASE_URL` locally; hosted providers that expose a pooled runtime URL should supply their direct/non-pooled connection here.
-
-`SHADOW_DATABASE_URL` is optional and only needed when `prisma migrate dev` cannot create a temporary shadow database with the direct connection. Never point it at an application database.
+Open [http://localhost:3000](http://localhost:3000). `DIRECT_URL` may equal `DATABASE_URL` locally; hosted pooled connections should provide a direct migration URL. `SHADOW_DATABASE_URL` is optional and must never target an application database.
 
 ## Database and quality commands
 
@@ -90,32 +81,29 @@ npm run test:integration
 npm run build
 ```
 
-`npm run test:integration` validates `TEST_DATABASE_URL`, refuses a shared or ambiguously named database, resets that database, applies committed migrations, and runs the serial integration suite.
+`npm run test:integration` validates `TEST_DATABASE_URL`, refuses a shared or ambiguously named database, resets only that target, applies all committed migrations, and runs the serial PostgreSQL suite.
 
 ## Administrator bootstrap
 
-There is no public role-update endpoint or role field in registration. First register the account normally, then promote that exact existing email from a trusted terminal with database credentials:
+Registration cannot submit a platform role. Promote an existing account from a trusted terminal:
 
 ```bash
 npm run admin:promote -- --email admin@example.com --confirm
 ```
 
-The explicit `--confirm` flag is required. The script cannot create an account and reports if the account is already an administrator.
-
 ## Project structure
 
 ```text
-prisma/                       Schema and committed migrations
+prisma/                       Schema and append-only migrations
 scripts/                      Guarded database and administrator commands
-src/app/                      App Router pages, auth handler, and server actions
-src/components/               Shared visual and interactive components
-src/env/                      Environment schemas and runtime validation
-src/features/                 Validation and pure organization/venue/seat-map domain logic
-src/lib/                      Lazy database/auth clients and request authorization
-src/server/                   Testable auth, authorization, venue, and seat-map services
-tests/                        Unit/component tests
+src/app/                      App Router pages, auth handler, and Server Actions
+src/components/               Shared UI and narrow client components
+src/features/                 Zod contracts and pure domain rules
+src/lib/                      Database/auth clients and request authorization
+src/server/                   Testable authorization and application services
+tests/                        Unit and component tests
 tests/integration/            Dedicated PostgreSQL integration tests
-docs/                         Product, architecture, security, and roadmap contracts
+docs/                         Product, architecture, security, operations, roadmap
 ```
 
-See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 2 operations](docs/phase-2-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 3 operations](docs/phase-3-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).

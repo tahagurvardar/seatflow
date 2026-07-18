@@ -11,34 +11,40 @@ export function formatCurrency(
   }).format(amount);
 }
 
-export function formatEventDate(date: string): string {
-  const calendarDate = `${date.slice(0, 10)}T00:00:00Z`;
+export function formatEventDate(date: string, timeZone = "UTC"): string {
   return new Intl.DateTimeFormat("en", {
     weekday: "short",
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(calendarDate));
+    timeZone,
+  }).format(new Date(date));
 }
 
-export function formatEventTime(date: string): string {
-  const match = date.match(/T(\d{2}):(\d{2})/);
-  return match ? `${match[1]}:${match[2]}` : "Time TBC";
+export function formatEventTime(date: string, timeZone = "UTC"): string {
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).format(new Date(date));
 }
 
-export function getDateBadge(date: string): { month: string; day: string } {
-  const value = new Date(`${date.slice(0, 10)}T00:00:00Z`);
+export function getDateBadge(
+  date: string,
+  timeZone = "UTC",
+): { month: string; day: string } {
+  const value = new Date(date);
   return {
     month: new Intl.DateTimeFormat("en", {
       month: "short",
-      timeZone: "UTC",
+      timeZone,
     })
       .format(value)
       .toUpperCase(),
     day: new Intl.DateTimeFormat("en", {
       day: "2-digit",
-      timeZone: "UTC",
+      timeZone,
     }).format(value),
   };
 }

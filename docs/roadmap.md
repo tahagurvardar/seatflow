@@ -28,18 +28,22 @@ Phase 1 intentionally stopped before venue, event, inventory, hold, payment, boo
 - Atomic publication, immutable snapshots, one current version, and deep clone-to-draft
 - PostgreSQL constraints, triggers, and lifecycle integration tests
 
-Phase 2 intentionally stops before persisted events/sessions, pricing, inventory, holds, bookings, real-time availability, payments, tickets, scanning, and analytics.
+Phase 2 intentionally stopped before persisted events/sessions, pricing, inventory, holds, bookings, real-time availability, payments, tickets, scanning, and analytics.
 
-## Phase 3 — Events, sessions, pricing, and inventory
+## Phase 3 — Events, sessions, venue access, and pricing (complete)
 
-- Persisted organizer events and concrete sessions
-- Session assignment to a published seat-map version
-- Pricing zones and authoritative session inventory
-- Publish/unpublish workflows and customer discovery integration
-- Operational validation without temporary holds
+- Persisted organizer events and UTC session schedules with venue-local display
+- Operator-approved venue grants with safe revocation and multi-tenant authorization
+- Exact immutable published seat-map binding and PostgreSQL overlap exclusion
+- Integer-minor-unit price tiers, section assignments, and capacity coverage
+- Separate event/session publication, cancellation/archive history, and database-backed public discovery
+- Real organizer/operator dashboard counts without simulated bookings or revenue
+
+Phase 3 deliberately has configured capacity rather than session inventory. It contains no holds, availability engine, Redis, WebSockets, bookings, checkout, payments, tickets, or analytics.
 
 ## Phase 4 — Holds and real-time availability
 
+- Authoritative per-session seat inventory derived from the immutable map binding
 - Atomic temporary holds with explicit expiry
 - Redis or equivalent short-lived coordination after failure-mode design
 - Real-time session availability projections
