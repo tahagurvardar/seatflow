@@ -4,7 +4,7 @@
 
 SeatFlow supports the journey from event discovery to a future verified digital ticket. Every authenticated user is a customer. Platform roles are `USER` and explicitly bootstrapped `ADMIN`; tenant capability comes independently from `OWNER`, `ADMIN`, or `MEMBER` memberships in `ORGANIZER` or `VENUE_OPERATOR` organizations.
 
-## Phase 3 through Phase 4B delivered scope
+## Phase 3 through Phase 5A delivered scope
 
 - Organizer-owned persistent events in concert, cinema, theatre, sport, and other categories
 - One or more concrete sessions stored as UTC instants and rendered in venue-local time
@@ -26,6 +26,13 @@ SeatFlow supports the journey from event discovery to a future verified digital 
 - Transactional inventory invalidations for materialization, hold creation/release/expiry, and cancellation
 - Redis Streams fan-out, BullMQ expiry automation, signed session rooms, reconnect refresh, and disconnected fallback
 - Live customer selection reconciliation and aggregate-only organizer refresh without trusting notification payloads
+- Authenticated checkout derived only from an owned, live hold and its immutable price snapshots
+- Integer-minor-unit order totals and immutable order-item ancestry; no client financial fields
+- Retry-safe provider-intent creation with a precommitted idempotency key and no database transaction held across provider I/O
+- Exact-raw-body signed webhook verification as the only authority for payment success
+- Exact-once booking creation, permanent booked inventory, converted hold history, and atomic booking invalidations
+- Customer checkout/booking views and aggregate-only organizer booking summaries
+- Operational queues for stale checkouts, verified webhook reprocessing, reconciliation, and paid-but-unfulfilled review
 
 OWNER and ADMIN members manage their authorized tenant resources. MEMBER users can inspect them but are read-only. All mutations re-authorize the current user and validate route context, nested ancestry, and lifecycle on the server.
 
@@ -33,7 +40,7 @@ OWNER and ADMIN members manage their authorized tenant resources. MEMBER users c
 
 An event is public only when the event is `PUBLISHED` and has a future, non-cancelled session in `SCHEDULED`, `ON_SALE`, or `SALES_PAUSED`. The session must have passed publication validation: active venue/space, immutable published map, positive sellable capacity, complete section pricing, one supported currency, valid windows, and no overlap. The catalogue shows the earliest eligible session and lowest configured tier price. Empty databases show an honest empty state.
 
-Seat selection is allowed only for a published event and an `ON_SALE` session, at or after `salesStartAt`, strictly before `salesEndAt`, and strictly before session start. Stored status alone never overrides server time. A public seat view reports another customer's held seat only as `UNAVAILABLE`; it exposes no customer identity, hold ID, or token. Phase 4A availability is request-time, not live synchronized.
+Seat selection is allowed only for a published event and an `ON_SALE` session, at or after `salesStartAt`, strictly before `salesEndAt`, and strictly before session start. Stored status alone never overrides server time. A public seat view reports another customer's held or booked seat only as `UNAVAILABLE`; it exposes no customer identity, hold ID, booking ID, or token.
 
 ## Lifecycle contract
 
@@ -42,8 +49,11 @@ Seat selection is allowed only for a published event and an `ON_SALE` session, a
 - Publication freezes the session configuration. Repeated publication is safe and idempotent.
 - Session cancellation and event cancellation preserve records; event cancellation cancels non-completed sessions.
 - Publishing a session atomically materializes exactly one inventory row per active seat in each priced section.
-- A hold begins `ACTIVE`, then terminates as `RELEASED` or `EXPIRED`; terminal holds and their items remain immutable history and cannot be revived.
+- A hold begins `ACTIVE`, then terminates as `RELEASED`, `EXPIRED`, or `CONVERTED`; terminal holds and their items remain immutable history and cannot be revived.
 - Only the authenticated owner can view or manually release a hold. Releasing or expiring returns every seat to `AVAILABLE` together.
+- Checkout begins `PENDING`, advances to `PAYMENT_PENDING`, and can finish as `FULFILLED`, `PAYMENT_FAILED`, `EXPIRED`, or a protected paid/review state. A success redirect is never a lifecycle transition.
+- A cryptographically verified success webhook creates exactly one `CONFIRMED` booking, copies exactly the ordered seats, changes inventory to permanent `BOOKED`, and converts the corresponding hold in one PostgreSQL transaction.
+- A verified success that cannot be safely fulfilled records paid-but-unfulfilled/review state for operators and never invents a booking or releases the seats as though payment had failed.
 - Cancelling a session releases all of its active holds before the cancellation transaction commits and rejects new acquisition.
 - An event can archive from draft, published, or cancelled state, but only an archived draft or published event can restore.
 - Only a securely authorized event with no sessions can be hard-deleted while still draft.
@@ -53,11 +63,17 @@ Seat selection is allowed only for a published event and an `ON_SALE` session, a
 
 Prices never use floating point. A tier stores a non-negative integer number of minor currency units. Zero-price tiers are intentionally allowed for complimentary admission. Every sellable section needs one tier; blocked seats remain physical seats but do not count as sellable or priced capacity. Physical seat type (`STANDARD`, `ACCESSIBLE`, `COMPANION`, or `PREMIUM`) does not automatically choose a commercial tier.
 
-`SessionSeatInventory` is the sellable capacity for one concrete session, not a mutable view of the seat map. Each row copies the published session tier's integer price and currency at materialization time. `SeatHoldItem` copies the inventory snapshot again when acquired. Client-supplied price, currency, expiry, ownership, or status is outside the hold contract and is ignored or rejected.
+`SessionSeatInventory` is the sellable capacity for one concrete session, not a mutable view of the seat map. Each row copies the published session tier's integer price and currency at materialization time. `SeatHoldItem` and then `CheckoutOrderItem` copy that trusted snapshot. The server calculates subtotal/total in integer minor units and requires one currency. Client-supplied price, total, currency, expiry, ownership, payment status, or booking status is outside the contract and is rejected.
 
-## Explicit Phase 4B exclusions
+## Payment and fulfillment authority
 
-There is no booking, order, checkout, payment, payment webhook, ticket, QR code, email delivery, coupon, refund, sales analytics, waitlist, dynamic pricing, or per-seat override. Redis and Socket.IO deliver invalidations only; BullMQ invokes PostgreSQL expiry only. The countdown remains informational, and PostgreSQL plus server time decide expiry. Phase 5 begins checkout/payment/booking work.
+The browser may start checkout and follow a provider/test flow, but cannot assert payment success. Provider intent creation and reconciliation may observe provider state but cannot create a booking. Only a signature-verified webhook over the exact raw request body can authorize success, and the database rechecks provider intent, amount, currency, order, hold, session, inventory, and lifecycle while holding deterministic row locks. Duplicate or concurrent events remain exact once.
+
+Redis and Socket.IO remain invalidation transport only. Redis unavailability may delay outbox delivery but cannot roll back or duplicate PostgreSQL payment fulfillment.
+
+## Explicit Phase 5B exclusions
+
+There is no ticket, QR code, scan credential, refund execution, chargeback/dispute workflow, coupon, email delivery, waitlist, dynamic pricing, per-seat override, tax/fee engine, split tender, raw-card collection, sales analytics, or external-provider adapter without reviewed credentials. A confirmed booking is not presented as a ticket.
 
 ## Product quality requirements
 

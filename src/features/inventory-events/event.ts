@@ -6,6 +6,13 @@ export const inventoryEventTypes = [
   "HOLD_RELEASED",
   "HOLD_EXPIRED",
   "SESSION_CANCELLED",
+  "CHECKOUT_CREATED",
+  "PAYMENT_INTENT_CREATED",
+  "PAYMENT_SUCCEEDED",
+  "PAYMENT_FAILED",
+  "INVENTORY_BOOKED",
+  "BOOKING_CONFIRMED",
+  "PAYMENT_REQUIRES_REVIEW",
 ] as const;
 
 export const inventoryEventTypeSchema = z.enum(inventoryEventTypes);
