@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { HoldSummaryCard } from "@/components/holds/hold-summary-card";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
@@ -8,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ROUTES } from "@/config/site";
 import { getUserMemberships, requireAuth } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
+import { listCustomerHolds } from "@/server/holds/hold-queries";
 
 export const metadata: Metadata = {
   title: "Customer Dashboard",
@@ -16,7 +18,7 @@ export const metadata: Metadata = {
 
 export default async function CustomerDashboardPage() {
   const session = await requireAuth(ROUTES.customerDashboard);
-  const [user, memberships] = await Promise.all([
+  const [user, memberships, holds] = await Promise.all([
     getDatabase().user.findUniqueOrThrow({
       where: { id: session.user.id },
       select: {
@@ -26,6 +28,7 @@ export default async function CustomerDashboardPage() {
       },
     }),
     getUserMemberships(session.user.id),
+    listCustomerHolds(getDatabase(), session.user.id),
   ]);
 
   return (
@@ -129,18 +132,52 @@ export default async function CustomerDashboardPage() {
           </article>
         </div>
 
-        <div className="mt-6">
-          <EmptyState
-            icon="ticket"
-            title="Booking data starts in a later phase"
-            description="Phase 3 adds persisted events, configured sessions, and section pricing, but customer bookings and tickets remain deliberately deferred. No fake purchase data is shown here."
-            action={
-              <Link href={ROUTES.events} className={buttonStyles({ size: "sm" })}>
-                Explore the public catalogue
-              </Link>
-            }
-          />
-        </div>
+        <section className="mt-6" aria-labelledby="holds-heading">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-orange-600">
+                Seat holds
+              </p>
+              <h2 id="holds-heading" className="mt-2 text-2xl font-black tracking-tight text-slate-950">
+                Active holds
+              </h2>
+            </div>
+          </div>
+
+          {holds.active.length > 0 ? (
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              {holds.active.map((hold) => (
+                <HoldSummaryCard key={hold.publicToken} hold={hold} />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-5">
+              <EmptyState
+                icon="ticket"
+                title="No active seat holds"
+                description="When you hold seats for a session they appear here with a live countdown. Holds are temporary; checkout and tickets arrive in a later phase."
+                action={
+                  <Link href={ROUTES.events} className={buttonStyles({ size: "sm" })}>
+                    Browse events
+                  </Link>
+                }
+              />
+            </div>
+          )}
+
+          {holds.recent.length > 0 ? (
+            <div className="mt-8">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">
+                Recently released or expired
+              </h3>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                {holds.recent.map((hold) => (
+                  <HoldSummaryCard key={hold.publicToken} hold={hold} />
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
       </Container>
     </section>
   );

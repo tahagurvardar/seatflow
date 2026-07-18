@@ -24,6 +24,8 @@ import {
   EventValidationError,
   isSessionOverlapConstraintError,
 } from "@/server/events/errors";
+import { releaseActiveHoldsForSession } from "@/server/holds/expiry-service";
+import { ensureSessionInventory } from "@/server/holds/inventory-service";
 
 export const eventSessionDetailInclude = {
   venue: true,
@@ -356,6 +358,12 @@ export async function publishEventSession(
         eventSession.salesStartAt <= now && now < eventSession.salesEndAt
           ? "ON_SALE"
           : "SCHEDULED";
+
+      // Materialize authoritative sellable inventory before completing the
+      // publication transition, so a published session always has consistent
+      // inventory equal to its sellable capacity.
+      await ensureSessionInventory(transaction, eventSession.id);
+
       return transaction.eventSession.update({
         where: { id: eventSession.id },
         data: { status, publishedAt: now },
@@ -427,8 +435,23 @@ export async function cancelEventSession(
     throw new EventLifecycleError("This session cannot be cancelled.");
   }
 
-  return database.eventSession.update({
-    where: { id: access.eventSession.id },
-    data: { status: "CANCELLED", cancelledAt: new Date() },
+  const now = new Date();
+  return withSerializableRetry(database, async (transaction) => {
+    // Lock the session's inventory first so any in-flight hold acquisition
+    // serializes with this cancellation and cannot slip a hold onto the
+    // session as it is being cancelled.
+    await transaction.$queryRaw`
+      SELECT "id" FROM "SessionSeatInventory"
+      WHERE "sessionId" = ${access.eventSession.id}
+      FOR UPDATE
+    `;
+    const cancelled = await transaction.eventSession.update({
+      where: { id: access.eventSession.id },
+      data: { status: "CANCELLED", cancelledAt: now },
+    });
+    // Existing active holds are released (not invented into bookings) and their
+    // seats returned to AVAILABLE; hold history is preserved.
+    await releaseActiveHoldsForSession(transaction, access.eventSession.id, now);
+    return cancelled;
   });
 }

@@ -55,7 +55,7 @@ export function SiteFooter() {
           </div>
         </div>
         <div className="flex flex-col gap-2 pt-7 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getUTCFullYear()} SeatFlow. Phase 3 event operations.</p>
+          <p>© {new Date().getUTCFullYear()} SeatFlow. Phase 4A inventory and holds.</p>
           <p>Built for memorable rooms, screens, stages, and stands.</p>
         </div>
       </Container>

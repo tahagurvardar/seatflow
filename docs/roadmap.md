@@ -41,18 +41,30 @@ Phase 2 intentionally stopped before persisted events/sessions, pricing, invento
 
 Phase 3 deliberately has configured capacity rather than session inventory. It contains no holds, availability engine, Redis, WebSockets, bookings, checkout, payments, tickets, or analytics.
 
-## Phase 4 — Holds and real-time availability
+## Phase 4A — PostgreSQL inventory and temporary holds (complete)
 
-- Authoritative per-session seat inventory derived from the immutable map binding
-- Atomic temporary holds with explicit expiry
-- Redis or equivalent short-lived coordination after failure-mode design
-- Real-time session availability projections
-- Idempotent expiry workers and reconnection behavior
-- Load, race-condition, and recovery tests
+- PostgreSQL-authoritative per-session inventory derived from the immutable map binding and section pricing
+- Immutable integer-minor-unit price/currency snapshots on inventory and hold items
+- Atomic all-or-nothing multi-seat holds with a ten-minute default TTL and eight-seat default maximum
+- Deterministic row locks, guarded claims, bounded transaction retries, and exact-seat-set idempotency
+- Manual owner release, lazy expiry reclamation, bounded `SKIP LOCKED` sweeps, and session-cancellation release
+- Coordinate-based customer selection, owner hold details/countdowns/dashboard, and organizer aggregate inventory
+- Boundary, component, security, invariant, race-condition, and recovery tests
+
+Phase 4A deliberately keeps PostgreSQL as the sole source of truth. It has no Redis, BullMQ, WebSockets, Socket.IO, live seat delivery, booking, checkout, payment, ticket, or automatic worker scheduling.
+
+## Phase 4B — Availability delivery and operations (planned)
+
+- Define Redis as a disposable projection/cache only after failure-mode and reconciliation design; PostgreSQL remains authoritative
+- Schedule durable execution of the existing idempotent expiry sweep with leaderless/concurrent-worker safety
+- Add real-time availability fan-out with session-scoped channels, authorization, reconnect, and snapshot/version recovery
+- Use a transactional outbox or equivalent post-commit publication so no database state change is lost
+- Measure hold conflicts, sweeper lag, expired-row recovery, projection drift, and reconnect load
+- Prove load, failover, replay, cache-loss, and stale-client behavior before operational rollout
 
 ## Phase 5 — Checkout, payments, bookings, and tickets
 
-- Authoritative price snapshots and checkout creation
+- Checkout creation that consumes the immutable Phase 4A hold/item price snapshots
 - Payment provider integration and signed idempotent webhooks
 - Booking state machine and refund/cancellation foundations
 - QR-coded digital tickets and secure ticket retrieval
