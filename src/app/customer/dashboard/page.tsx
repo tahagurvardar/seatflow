@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { BookingSummaryCard } from "@/components/bookings/booking-summary-card";
 import { HoldSummaryCard } from "@/components/holds/hold-summary-card";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import { ROUTES } from "@/config/site";
 import { getUserMemberships, requireAuth } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
 import { listCustomerHolds } from "@/server/holds/hold-queries";
+import { listCustomerBookings } from "@/server/payments/booking-queries";
 
 export const metadata: Metadata = {
   title: "Customer Dashboard",
@@ -18,7 +20,7 @@ export const metadata: Metadata = {
 
 export default async function CustomerDashboardPage() {
   const session = await requireAuth(ROUTES.customerDashboard);
-  const [user, memberships, holds] = await Promise.all([
+  const [user, memberships, holds, bookings] = await Promise.all([
     getDatabase().user.findUniqueOrThrow({
       where: { id: session.user.id },
       select: {
@@ -29,6 +31,7 @@ export default async function CustomerDashboardPage() {
     }),
     getUserMemberships(session.user.id),
     listCustomerHolds(getDatabase(), session.user.id),
+    listCustomerBookings(getDatabase(), session.user.id, 4),
   ]);
 
   return (
@@ -132,7 +135,24 @@ export default async function CustomerDashboardPage() {
           </article>
         </div>
 
-        <section className="mt-6" aria-labelledby="holds-heading">
+        <section className="mt-6" aria-labelledby="bookings-heading">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Bookings</p>
+              <h2 id="bookings-heading" className="mt-2 text-2xl font-black tracking-tight text-slate-950">Confirmed bookings</h2>
+            </div>
+            <Link href={ROUTES.customerBookings} className={buttonStyles({ variant: "outline", size: "sm" })}>View all</Link>
+          </div>
+          {bookings.length ? (
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              {bookings.map((booking) => <BookingSummaryCard key={booking.publicReference} booking={booking} />)}
+            </div>
+          ) : (
+            <p className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600">No confirmed bookings yet. A browser redirect alone never creates one.</p>
+          )}
+        </section>
+
+        <section className="mt-8" aria-labelledby="holds-heading">
           <div className="flex items-end justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-orange-600">
@@ -155,7 +175,7 @@ export default async function CustomerDashboardPage() {
               <EmptyState
                 icon="ticket"
                 title="No active seat holds"
-                description="When you hold seats for a session they appear here with a live countdown. Holds are temporary; checkout and tickets arrive in a later phase."
+                description="When you hold seats for a session they appear here with a live countdown. Checkout can convert an active hold into a confirmed booking; tickets arrive in Phase 5B."
                 action={
                   <Link href={ROUTES.events} className={buttonStyles({ size: "sm" })}>
                     Browse events
@@ -168,7 +188,7 @@ export default async function CustomerDashboardPage() {
           {holds.recent.length > 0 ? (
             <div className="mt-8">
               <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">
-                Recently released or expired
+                Recent hold history
               </h3>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 {holds.recent.map((hold) => (

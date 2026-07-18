@@ -209,7 +209,7 @@ export async function listCustomerHolds(
       include: holdViewInclude,
     }),
     database.seatHold.findMany({
-      where: { userId, status: { in: ["RELEASED", "EXPIRED"] } },
+      where: { userId, status: { in: ["RELEASED", "EXPIRED", "CONVERTED"] } },
       orderBy: { updatedAt: "desc" },
       take: recentLimit,
       include: holdViewInclude,

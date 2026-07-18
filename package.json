@@ -14,6 +14,7 @@
     "test:watch": "vitest --config vitest.config.mts",
     "test:integration": "tsx scripts/test-database.ts test",
     "test:redis": "tsx scripts/test-redis.ts",
+    "test:provider": "vitest run --config vitest.provider.config.mts",
     "db:generate": "prisma generate",
     "db:migrate": "tsx scripts/database.ts migrate",
     "db:migrate:deploy": "tsx scripts/database.ts deploy",
@@ -29,6 +30,10 @@
     "holds:schedule": "tsx scripts/register-hold-expiry-schedule.ts",
     "holds:worker": "tsx scripts/hold-expiry-worker.ts",
     "realtime:gateway": "tsx scripts/realtime-gateway.ts",
+    "payments:reconcile": "tsx scripts/reconcile-payments.ts",
+    "payments:webhook:reprocess": "tsx scripts/reprocess-payment-webhook.ts",
+    "payments:report": "tsx scripts/report-payment-operations.ts",
+    "checkouts:expire": "tsx scripts/expire-checkouts.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

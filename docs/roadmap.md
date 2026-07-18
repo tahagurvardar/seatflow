@@ -65,13 +65,22 @@ Phase 4A deliberately keeps PostgreSQL as the sole source of truth. It has no Re
 
 Phase 4B deliberately leaves every allocation decision in PostgreSQL and implements no booking, checkout, payment, order, ticket, QR code, refund, coupon, email, waitlist, dynamic pricing, or sales analytics.
 
-## Phase 5 — Checkout, payments, bookings, and tickets
+## Phase 5A — Checkout, payments, and bookings (complete)
 
 - Checkout creation that consumes the immutable Phase 4A hold/item price snapshots
-- Payment provider integration and signed idempotent webhooks
-- Booking state machine and refund/cancellation foundations
-- QR-coded digital tickets and secure ticket retrieval
-- Reconciliation and failure recovery
+- Provider boundary and a deterministic signed development/test provider with a production deployment gate
+- Precommitted provider idempotency, exact-raw-body signature verification, and duplicate/concurrent webhook safety
+- Exact-once confirmed booking fulfillment, permanent booked inventory, and converted hold history
+- Customer checkout/booking pages and aggregate organizer booking summaries
+- Reconciliation, verified-webhook reprocessing, stale-checkout expiry, paid-unfulfilled reporting, and Redis-outage recovery
+
+## Phase 5B — Tickets and post-payment lifecycle
+
+- Secure digital ticket issuance and retrieval
+- QR/barcode credentials with rotation/revocation semantics
+- Refund, cancellation, chargeback, and dispute foundations
+- Email delivery and customer-support workflows
+- Reviewed production payment-provider adapter and deployment verification
 
 ## Phase 6 — Operations and scale
 

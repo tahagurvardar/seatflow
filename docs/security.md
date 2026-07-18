@@ -1,4 +1,4 @@
-# SeatFlow Phase 4A security contract
+# SeatFlow Phase 5A security contract
 
 ## Trust boundaries
 
@@ -15,6 +15,9 @@
 - Session IDs, physical-seat IDs, idempotency keys, and public hold tokens are untrusted. Price, currency, expiry, status, and ownership are not accepted from the client contract.
 - A hold token is a 32-byte CSPRNG value encoded as URL-safe base64. Detail and release queries still require the matching authenticated owner, and unknown/cross-user tokens return the same not-found-style result.
 - Another customer's held seat is exposed only as `UNAVAILABLE`; no customer ID, internal hold ID, expiry, or public token is included.
+- Checkout actions accept only an owned hold token and idempotency key. Price, currency, total, user ID, provider status, order status, and booking state are server/database owned.
+- A client redirect, query parameter, provider-create response, reconciliation response, Redis message, or browser callback is never payment authority. Only a cryptographically verified provider webhook can authorize success.
+- Customer checkout and booking reads require both an authenticated user and matching ownership; public references are not bearer credentials.
 
 Better Auth stores HTTP-only PostgreSQL sessions using the `seatflow` cookie prefix. Production enables secure cookies; origin and CSRF protections remain enabled.
 
@@ -34,6 +37,10 @@ Application services validate full ancestry and lifecycle inside transactions. P
 - consistent `AVAILABLE`/`HELD` linkage, same-session current holds, and non-negative prices
 - one active hold per customer/session, bounded idempotency keys, unguessable token length, and legal terminal timestamps
 - immutable hold identity/items, no revival of released/expired holds, and permanent inventory/hold history
+- immutable checkout/order-item financial snapshots, exact ancestry, integer totals, one currency, and legal lifecycle timestamps
+- unique provider event identity, stable provider idempotency, first-terminal payment behavior, and immutable normalized webhook observations
+- one booking per order, one booking seat per inventory row, one physical seat per session, and deferred exact order-to-booking fulfillment
+- `BOOKED` inventory only after its booking seat exists, no transition out of `BOOKED`, and exact hold conversion
 
 Repeated publish/revoke requests are safe. Unique/exclusion races are mapped to domain errors where practical and cannot leave partially published configuration.
 
@@ -71,6 +78,22 @@ Integration commands require `TEST_DATABASE_URL`. The name must visibly contain 
 
 The platform-admin health endpoint returns only counts, durations, ages, and connectivity booleans. It never returns URLs, credentials, tokens, payload bodies, customer data, or stack traces.
 
+## Phase 5A checkout and payment boundaries
+
+The checkout service locks and reloads the hold and inventory, validates authenticated ownership, live eligibility, session ancestry, and exact immutable amounts, then commits the order and payment-attempt idempotency key before provider I/O. Provider timeouts cannot hold database locks or create a second order/attempt; retry uses the stored key. No endpoint accepts raw card, CVV, bank, or payment-method data.
+
+The webhook endpoint bounds `Content-Length` before reading and bounds the actual byte body afterward. It verifies the signature over the exact raw bytes before parsing or persisting normalized data. The local provider uses HMAC-SHA256 and Node's constant-time digest comparison, accepts only a strict timestamp/signature grammar, and is constructor- and configuration-gated out of production. Webhook secrets belong only in the deployment secret manager and must be rotated independently of Better Auth and Redis secrets.
+
+Verified webhook fulfillment re-locks every authoritative record and verifies provider, intent, amount, currency, ownership, session, hold, and ordered inventory. Duplicate deliveries are identified by `(provider, providerEventId)`; concurrent distinct success events converge through row locks and database uniqueness. Failure or contradictory terminal events cannot overwrite an already accepted success. A mismatch or unsafe post-payment state becomes a bounded review code, never a fabricated booking.
+
+The success page queries PostgreSQL. It may show pending, failed, review, or confirmed state, and shows confirmed only after a stored `CONFIRMED` booking exists. A confirmed booking summary contains event/session/venue and seat labels but is explicitly not a ticket or entry credential.
+
+## Operations and incident safety
+
+Reconciliation may create/retrieve provider intents and store a bounded provider status, but even a provider-reported success remains `awaitingVerifiedWebhook`. Verified-webhook reprocessing accepts an internal stored webhook ID and refuses unverified records. Paid-but-unfulfilled rows are preserved for operator review; Phase 5A has no automatic refund or inventory release path.
+
+Redis failure occurs after the PostgreSQL transaction boundary. A verified booking, booking seats, permanent inventory state, converted hold, and outbox events commit together while Redis is unavailable. The outbox dispatcher retries after recovery. Redis cannot authorize, roll back, or duplicate fulfillment.
+
 ## Current security limitations
 
-Email verification, password reset delivery, invitations, audit-log UI, distributed HTTP rate limiting, broader abuse controls, and stronger administrator lifecycle controls remain future work. Phase 4B has no booking, checkout, payment verification, ticket, QR, refund, email, waitlist, dynamic-pricing, or scanning security model. The countdown and Redis delivery are presentation/transport only; PostgreSQL state and server time remain authoritative.
+Email verification, password reset delivery, invitations, audit-log UI, distributed HTTP rate limiting, broader abuse controls, and stronger administrator lifecycle controls remain future work. Phase 5A has no production external-provider adapter, ticket/QR/scan credential, refund, chargeback/dispute, coupon, email, waitlist, dynamic-pricing, tax/fee, or raw-card security model. The local signed provider is simulated development/test infrastructure only. PostgreSQL state, verified webhook authority, and server time remain decisive.

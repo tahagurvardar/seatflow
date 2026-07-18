@@ -13,6 +13,7 @@ export const ROUTES = {
   login: "/login",
   register: "/register",
   customerDashboard: "/customer/dashboard",
+  customerBookings: "/customer/bookings",
   organizerDashboard: "/organizer/dashboard",
   organizerOnboarding: "/organizer/onboarding",
   venueOperatorDashboard: "/venue-operator/dashboard",
@@ -22,6 +23,10 @@ export const ROUTES = {
   eventSessionSeats: (slug: string, sessionId: string) =>
     `/events/${slug}/sessions/${sessionId}/seats` as const,
   customerHold: (holdToken: string) => `/customer/holds/${holdToken}` as const,
+  customerCheckout: (orderReference: string) =>
+    `/customer/checkouts/${orderReference}` as const,
+  customerBooking: (bookingReference: string) =>
+    `/customer/bookings/${bookingReference}` as const,
   organizerEvents: (organizationSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events` as const,
   organizerNewEvent: (organizationSlug: string) =>
@@ -95,6 +100,9 @@ export const PUBLIC_ROUTES = [
 export const PROTECTED_ROUTES = [
   ROUTES.customerDashboard,
   "/customer/holds/[holdToken]",
+  "/customer/checkouts/[orderReference]",
+  ROUTES.customerBookings,
+  "/customer/bookings/[bookingReference]",
   ROUTES.organizerDashboard,
   ROUTES.organizerOnboarding,
   ROUTES.venueOperatorDashboard,

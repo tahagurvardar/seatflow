@@ -17,8 +17,8 @@ export function SiteFooter() {
           <div>
             <Logo inverted />
             <p className="mt-5 max-w-sm text-sm leading-6 text-slate-400">
-              {SITE_CONFIG.description} Booking technology arrives in a future
-              phase; discovery starts here.
+              {SITE_CONFIG.description} Hold seats and complete a verified booking;
+              digital tickets and entry credentials arrive in Phase 5B.
             </p>
           </div>
           <div>
@@ -55,7 +55,7 @@ export function SiteFooter() {
           </div>
         </div>
         <div className="flex flex-col gap-2 pt-7 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getUTCFullYear()} SeatFlow. Phase 4B live inventory invalidation.</p>
+          <p>© {new Date().getUTCFullYear()} SeatFlow. Phase 5A verified booking.</p>
           <p>Built for memorable rooms, screens, stages, and stands.</p>
         </div>
       </Container>

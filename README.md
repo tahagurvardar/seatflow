@@ -1,6 +1,6 @@
 # SeatFlow
 
-SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 4B: transactional inventory events, automated expiration, Redis transport, and real-time invalidation**, built without weakening the PostgreSQL-authoritative Phase 4A inventory and hold engine.
+SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 5A: checkout, cryptographically verified payment processing, and exact-once booking**, built on the PostgreSQL-authoritative inventory, hold, and transactional-outbox foundation.
 
 Every authenticated user remains a customer. Platform privilege is deliberately narrow (`USER` or `ADMIN`); organizer and venue-operator capability comes from organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
 
@@ -30,12 +30,18 @@ Every authenticated user remains a customer. Platform privilege is deliberately 
 - Signed session-room Socket.IO subscriptions, reconnect refresh, duplicate/stale tolerance, and fallback polling
 - Customer selection reconciliation plus aggregate-only organizer inventory refresh
 - Protected operational health for Redis, outbox, dispatcher, expiry lag, conflicts, retries, and realtime clients
+- Server-owned checkout totals copied from immutable hold/inventory snapshots, with bounded expiry and retry-safe idempotency
+- A payment-provider boundary plus deterministic signed development/test provider that is impossible to enable in production
+- Raw-body HMAC webhook verification, provider-event deduplication, amount/currency checks, and first-terminal-state protection
+- Exact-once booking fulfillment that converts the hold, permanently marks inventory `BOOKED`, and writes booking/outbox records atomically
+- Customer checkout status and booking history/detail pages plus organizer aggregate booking summaries
+- Reconciliation, verified-webhook reprocessing, stale-checkout expiry, and paid-but-unfulfilled operational reporting
 - Coordinate-based customer seat selection, owner-safe hold details/countdowns, dashboard summaries, and aggregate organizer inventory counts
 - Database-backed public catalogue, featured content, and true event-detail 404 behavior with no mock fallback
 - Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
 - Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Phase 4B still does **not** implement bookings, orders, checkout, payments, payment webhooks, tickets, QR codes, refunds, coupons, dynamic pricing, waitlists, email, or sales analytics. A real-time message never changes availability locally: it tells the browser to reload the authoritative PostgreSQL snapshot, and hold creation rechecks PostgreSQL again.
+Phase 5A intentionally stops at confirmed bookings. It does **not** issue tickets or QR codes, collect raw card details, process refunds, coupons, chargebacks, email delivery, waitlists, dynamic pricing, scanning, or sales analytics. Client redirects and Redis messages never mark an order paid or create a booking; only a verified provider webhook can authorize payment success.
 
 ## Main routes
 
@@ -45,6 +51,9 @@ Phase 4B still does **not** implement bookings, orders, checkout, payments, paym
 | `/login`, `/register` | Better Auth identity flows |
 | `/customer/dashboard` | Authenticated identity, membership, and own-hold summary |
 | `/customer/holds/[holdToken]` | Owner-only active/released/expired hold detail and manual release |
+| `/customer/checkouts/[orderReference]` | Owner-only checkout status; simulated payment controls exist only outside production |
+| `/customer/bookings` | Authenticated customer's confirmed booking history |
+| `/customer/bookings/[bookingReference]` | Owner-only booking and booked-seat detail; explicitly not a ticket |
 | `/events/[slug]/sessions/[sessionId]/seats` | Public availability preview; authenticated customers can select and hold seats |
 | `/organizer/dashboard` | Organizer tenant selection and real Phase 3 counts |
 | `/organizer/organizations/[organizationSlug]/events` | Organizer event list and management entry point |
@@ -63,6 +72,8 @@ Phase 4B still does **not** implement bookings, orders, checkout, payments, paym
 | `/api/inventory/sessions/[sessionId]` | No-store authoritative customer snapshot plus a short-lived signed room ticket |
 | `/api/inventory/sessions/[sessionId]/organizer` | Membership-protected aggregate inventory snapshot |
 | `/api/operations/inventory/health` | Platform-admin-only non-sensitive Phase 4B health and metrics |
+| `/api/payments/webhooks/[provider]` | Raw-body provider webhook ingress with signature verification before parsing/persistence |
+| `/api/operations/payments/health` | Platform-admin-only non-sensitive Phase 5A health counts |
 
 ## Local setup
 
@@ -99,11 +110,16 @@ npm run inventory:dispatcher
 npm run holds:schedule
 npm run holds:worker
 npm run realtime:gateway
+npm run payments:reconcile
+npm run payments:webhook:reprocess -- --event-id=<internal-webhook-id>
+npm run payments:report
+npm run checkouts:expire
 npm run lint
 npm run typecheck
 npm test
 npm run test:integration
 npm run test:redis
+npm run test:provider
 npm run build
 ```
 
@@ -112,6 +128,8 @@ npm run build
 `npm run holds:backfill` additively materializes inventory for eligible sessions published before Phase 4A. It never resets data or invents pricing and refuses partial inconsistent inventory. `npm run holds:sweep -- --batch-size 100 --max-batches 10` expires overdue active holds in bounded, concurrency-safe batches. See the Phase 4A operations guide before running either command outside local development.
 
 `npm run inventory:dispatch` processes one bounded outbox batch; `npm run inventory:dispatcher` runs continuously. `npm run holds:schedule` idempotently registers the BullMQ repeat schedule, `npm run holds:worker` consumes it, and `npm run realtime:gateway` serves signed session rooms. The manual expiry command remains supported. See the [Phase 4B operations guide](docs/phase-4b-operations.md) for rollout, health, Redis outage, and production process requirements.
+
+`npm run payments:reconcile -- --limit=100` initializes or refreshes pending provider intents but deliberately cannot grant payment success. `npm run payments:webhook:reprocess` accepts only an internally stored, verified webhook ID. Use `npm run payments:report` for paid-unfulfilled/stale queues and `npm run checkouts:expire -- --batch-size=100 --max-batches=10` for bounded unpaid expiry. See the [Phase 5A operations guide](docs/phase-5a-operations.md) before deployment or incident recovery.
 
 ## Administrator bootstrap
 
@@ -136,4 +154,4 @@ tests/integration/            Dedicated PostgreSQL integration tests
 docs/                         Product, architecture, security, operations, roadmap
 ```
 
-See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [Phase 5A operations](docs/phase-5a-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).

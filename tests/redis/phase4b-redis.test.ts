@@ -13,6 +13,9 @@ import { createRealtimeRoomTicket } from "../../src/features/inventory-events/ro
 import { createDatabaseClient } from "../../src/lib/database";
 import { createRedisConnection, inventoryStreamKey } from "../../src/lib/redis";
 import { acquireSeatHold } from "../../src/server/holds/hold-service";
+import { createCheckoutAndPayment } from "../../src/server/payments/checkout-service";
+import { LocalSignedPaymentProvider } from "../../src/server/payments/local-signed-provider";
+import { processPaymentWebhook } from "../../src/server/payments/webhook-service";
 import {
   createHoldExpiryQueue,
   createHoldExpiryWorker,
@@ -26,6 +29,7 @@ import { createRedisInventoryFixture, createRedisTestCustomer } from "./inventor
 
 const environment = readInventoryEventEnvironment();
 const streamKey = inventoryStreamKey(environment.REDIS_STREAM_PREFIX);
+const paymentProviderSecret = "phase-5a-redis-provider-secret-000000000000000000";
 let database: PrismaClient;
 let connections: Redis[] = [];
 let gateway: ChildProcess | null = null;
@@ -267,6 +271,72 @@ describe("Phase 4B Redis outage and BullMQ automation", () => {
     );
     expect(recovered.processed).toBeGreaterThan(0);
     expect(await database.inventoryEventOutbox.count({ where: { processedAt: null } })).toBe(0);
+  });
+
+  it("keeps a successful payment booking exact-once while Redis is unavailable and drains after recovery", async () => {
+    const fixture = await createRedisInventoryFixture(database, "PaymentRedisOutage");
+    const customer = await createRedisTestCustomer(database, "PaymentRedisOutage");
+    const acquired = await acquireSeatHold(database, { userId: customer.id }, {
+      sessionId: fixture.session.id,
+      seatIds: fixture.seatIds.slice(0, 2),
+      idempotencyKey: `payment-redis-outage-hold-${Date.now()}`,
+    });
+    const provider = new LocalSignedPaymentProvider(paymentProviderSecret, "test");
+    const checkout = await createCheckoutAndPayment(
+      database,
+      provider,
+      { userId: customer.id },
+      {
+        holdToken: acquired.hold.publicToken,
+        idempotencyKey: `payment-redis-outage-checkout-${Date.now()}`,
+      },
+    );
+    const attempt = await database.paymentAttempt.findFirstOrThrow({
+      where: { orderId: checkout.order.orderId },
+    });
+    const delivery = provider.createSignedWebhook({
+      providerIntentId: attempt.providerIntentId!,
+      outcome: "success",
+      amountMinor: attempt.amountMinor,
+      currency: attempt.currency,
+      eventId: "local_evt_payment_redis_outage",
+    });
+
+    const badEnvironment = { ...environment, REDIS_URL: "redis://127.0.0.1:6398" };
+    const badRedis = createRedisConnection({
+      environment: badEnvironment,
+      connectionName: "redis-integration:payment-outage",
+    });
+    badRedis.on("error", () => {});
+    connections.push(badRedis);
+
+    const webhook = await processPaymentWebhook(database, provider, delivery);
+    expect(webhook.outcome).toBe("BOOKED");
+    await expect(database.booking.count()).resolves.toBe(1);
+    await expect(database.bookingSeat.count()).resolves.toBe(2);
+    await expect(database.sessionSeatInventory.count({ where: { state: "BOOKED" } })).resolves.toBe(2);
+
+    const firstNow = new Date(Date.now() + 1_000);
+    const failed = await dispatchInventoryEventBatch(
+      database,
+      new RedisInventoryEventTransport(badRedis, badEnvironment),
+      { ...getOutboxDispatcherConfiguration(environment), batchSize: 100, backoffBaseMs: 100, backoffMaximumMs: 100 },
+      firstNow,
+    );
+    expect(failed.failed).toBeGreaterThan(0);
+    expect(await database.inventoryEventOutbox.count({ where: { processedAt: null } })).toBeGreaterThan(0);
+    await expect(processPaymentWebhook(database, provider, delivery)).resolves.toMatchObject({ outcome: "BOOKED" });
+    await expect(database.booking.count()).resolves.toBe(1);
+
+    const recovered = await dispatchInventoryEventBatch(
+      database,
+      new RedisInventoryEventTransport(redisConnection("payment-recovery"), environment),
+      getOutboxDispatcherConfiguration(environment),
+      new Date(firstNow.getTime() + 101),
+    );
+    expect(recovered.processed).toBeGreaterThan(0);
+    await expect(database.inventoryEventOutbox.count({ where: { processedAt: null } })).resolves.toBe(0);
+    await expect(database.booking.count()).resolves.toBe(1);
   });
 
   it("runs repeated sweeps safely with two BullMQ workers", async () => {

@@ -91,12 +91,48 @@ const inventoryEventEnvironmentSchema = z.object({
     .default(10),
 });
 
+const paymentEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    PAYMENT_PROVIDER: z.enum(["LOCAL_SIGNED", "EXTERNAL"]),
+    LOCAL_PAYMENT_WEBHOOK_SECRET: z.string().min(32).max(512).optional(),
+    PAYMENT_WEBHOOK_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(1_048_576)
+      .default(65_536),
+  })
+  .superRefine((environment, context) => {
+    if (
+      environment.PAYMENT_PROVIDER === "LOCAL_SIGNED" &&
+      !environment.LOCAL_PAYMENT_WEBHOOK_SECRET
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["LOCAL_PAYMENT_WEBHOOK_SECRET"],
+        message: "is required for the local signed provider",
+      });
+    }
+    if (
+      environment.NODE_ENV === "production" &&
+      environment.PAYMENT_PROVIDER === "LOCAL_SIGNED"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["PAYMENT_PROVIDER"],
+        message: "LOCAL_SIGNED is forbidden in production",
+      });
+    }
+  });
+
 export type ApplicationEnvironment = z.infer<
   typeof applicationEnvironmentSchema
 >;
 export type InventoryEventEnvironment = z.infer<
   typeof inventoryEventEnvironmentSchema
 >;
+export type PaymentEnvironment = z.infer<typeof paymentEnvironmentSchema>;
 
 function formatEnvironmentError(scope: string, error: z.ZodError) {
   const details = error.issues
@@ -196,4 +232,14 @@ export function readOptionalInventoryEventEnvironment(
 ): InventoryEventEnvironment | null {
   if (!source.REDIS_URL) return null;
   return readInventoryEventEnvironment(source);
+}
+
+export function readPaymentEnvironment(
+  source: EnvironmentSource = process.env,
+): PaymentEnvironment {
+  const result = paymentEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow payment provider", result.error);
+  }
+  return result.data;
 }

@@ -1,8 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { releaseHoldAction } from "@/app/customer/hold-actions";
+import { createCheckoutAction } from "@/app/customer/checkout-actions";
+import { PendingSubmitButton } from "@/components/checkout/pending-submit-button";
 import { HoldCountdown } from "@/components/holds/hold-countdown";
 import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
@@ -43,6 +47,7 @@ export default async function HoldDetailPage({ params, searchParams }: HoldPageP
 
   const isLive = view.status === "ACTIVE" && view.live;
   const isReleased = view.status === "RELEASED";
+  const isConverted = view.status === "CONVERTED";
 
   return (
     <Section className="bg-slate-50">
@@ -71,15 +76,15 @@ export default async function HoldDetailPage({ params, searchParams }: HoldPageP
               className={
                 isLive
                   ? "bg-emerald-500/15 text-emerald-200 ring-emerald-400/20"
-                  : isReleased
+                  : isReleased || isConverted
                     ? "bg-slate-500/20 text-slate-200 ring-white/15"
                     : "bg-red-500/15 text-red-200 ring-red-400/20"
               }
             >
-              {isLive ? "ACTIVE HOLD" : isReleased ? "RELEASED" : "EXPIRED"}
+              {isLive ? "ACTIVE HOLD" : isReleased ? "RELEASED" : isConverted ? "CONVERTED" : "EXPIRED"}
             </Badge>
           </div>
-          <h1 className="mt-4 text-3xl font-black tracking-[-0.04em] sm:text-4xl">
+          <h1 className="mt-4 break-words text-3xl font-black tracking-[-0.04em] sm:text-4xl">
             {view.event.title}
           </h1>
           <p className="mt-3 text-slate-300">
@@ -104,15 +109,17 @@ export default async function HoldDetailPage({ params, searchParams }: HoldPageP
         ) : (
           <div className="mt-6 rounded-3xl border border-slate-200 bg-white p-6 text-center" role="status">
             <p className="text-sm font-semibold text-slate-700">
-              {isReleased
+              {isConverted
+                ? "This hold was converted into a confirmed booking. Its seats are permanently booked."
+                : isReleased
                 ? "This hold was released. The seats are no longer reserved for you."
                 : "This hold has expired. The seats have been returned to availability."}
             </p>
             <Link
-              href={ROUTES.eventSessionSeats(view.event.publicSlug, view.session.id)}
+              href={isConverted ? ROUTES.customerBookings : ROUTES.eventSessionSeats(view.event.publicSlug, view.session.id)}
               className={buttonStyles({ variant: "outline", size: "sm", className: "mt-4" })}
             >
-              Choose seats again
+              {isConverted ? "View bookings" : "Choose seats again"}
             </Link>
           </div>
         )}
@@ -122,8 +129,8 @@ export default async function HoldDetailPage({ params, searchParams }: HoldPageP
             {view.seatCount} {view.seatCount === 1 ? "seat" : "seats"}
           </h2>
           <ul className="mt-4 divide-y divide-slate-100">
-            {view.seats.map((seat, index) => (
-              <li key={`${seat.sectionCode}-${seat.rowLabel}-${seat.seatLabel}-${index}`} className="flex items-center justify-between py-3">
+            {view.seats.map((seat) => (
+              <li key={`${seat.sectionCode}-${seat.rowLabel}-${seat.seatLabel}`} className="flex items-center justify-between py-3">
                 <div>
                   <p className="font-bold text-slate-950">
                     {seat.sectionName} · Row {seat.rowLabel} · Seat {seat.seatLabel}
@@ -145,17 +152,17 @@ export default async function HoldDetailPage({ params, searchParams }: HoldPageP
         </section>
 
         <div className="mt-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">
-            Checkout and payment arrive in Phase 5. No payment is taken and no ticket is
-            issued yet — this is a temporary seat hold only.
+          <div className="rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-900">
+            Checkout copies these server-owned seat and price snapshots into an immutable order. A booking is confirmed only after a verified payment webhook.
           </div>
-          <button
-            type="button"
-            disabled
-            className={buttonStyles({ size: "lg", className: "mt-4 w-full" })}
-          >
-            Checkout arrives in Phase 5
-          </button>
+          {isLive ? (
+            <form action={createCheckoutAction.bind(null, view.publicToken)} className="mt-4">
+              <input type="hidden" name="idempotencyKey" value={`checkout:${randomUUID()}`} />
+              <PendingSubmitButton pendingLabel="Creating secure checkout…" className="w-full">
+                Continue to secure checkout
+              </PendingSubmitButton>
+            </form>
+          ) : null}
           {isLive ? (
             <form action={releaseHoldAction.bind(null, view.publicToken)} className="mt-3">
               <button

@@ -26,7 +26,7 @@ export function canReleaseHold(status: SeatHoldStatus) {
 }
 
 export function isTerminalHoldStatus(status: SeatHoldStatus) {
-  return status === "RELEASED" || status === "EXPIRED";
+  return status === "RELEASED" || status === "EXPIRED" || status === "CONVERTED";
 }
 
 /** Whole seconds remaining before expiry, clamped at zero. Presentation only. */

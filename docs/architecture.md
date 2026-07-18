@@ -2,7 +2,7 @@
 
 ## Architectural style
 
-SeatFlow is a modular monolith on Next.js 16 App Router with separate Node worker and realtime processes. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, active holds, and the transactional delivery hand-off.
+SeatFlow is a modular monolith on Next.js 16 App Router with separate Node worker and realtime processes. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, holds, checkout, payment observations, bookings, and the transactional delivery hand-off.
 
 Database and Better Auth clients initialize lazily, so code generation and production builds do not require a live connection. Protected pages and every action perform fresh server-side authorization.
 
@@ -35,6 +35,13 @@ erDiagram
   EVENT_SESSION ||--o{ INVENTORY_EVENT_OUTBOX : emits
   SEAT_HOLD ||--|{ SEAT_HOLD_ITEM : contains
   SESSION_SEAT_INVENTORY ||--o{ SEAT_HOLD_ITEM : records
+  SEAT_HOLD ||--o{ CHECKOUT_ORDER : checks_out
+  CHECKOUT_ORDER ||--|{ CHECKOUT_ORDER_ITEM : snapshots
+  CHECKOUT_ORDER ||--|{ PAYMENT_ATTEMPT : attempts
+  PAYMENT_ATTEMPT ||--o{ PAYMENT_WEBHOOK_EVENT : receives
+  CHECKOUT_ORDER ||--o| BOOKING : fulfills
+  BOOKING ||--|{ BOOKING_SEAT : contains
+  SESSION_SEAT_INVENTORY ||--o| BOOKING_SEAT : permanently_allocates
 ```
 
 Events belong to organizer organizations. Venues belong to venue-operator organizations. `VenueAccessGrant` is the deliberate relationship between those tenancy boundaries and records both parties, the venue, status, timestamps, and grant/revoke actors. Active duplicates are prevented by a PostgreSQL partial unique index; grant history is append-only.
@@ -69,6 +76,8 @@ Published session venue, space, seat-map, dates, pricing, and assignments are im
 
 `SeatHold` stores owner, session, unguessable public token, idempotency key, server expiry, and lifecycle. `SeatHoldItem` stores immutable historical membership and copies the inventory price snapshot. PostgreSQL checks and triggers enforce state/hold linkage, same-session ancestry, faithful prices, legal lifecycle timestamps, permanent inventory/hold history, and terminal-state immutability. A partial unique index allows at most one active hold per customer per session.
 
+`CheckoutOrder` and `CheckoutOrderItem` form another immutable financial snapshot owned by the same authenticated customer. The order copies session, hold, currency, subtotal, total, expiry, and a public reference; items copy physical seat, inventory, tier, unit price, and currency. Database triggers verify exact ancestry and totals. Client price, currency, total, user, order status, and payment status are not part of the input contract.
+
 ## Atomic acquisition and expiry
 
 Hold acquisition accepts only session ID, physical-seat IDs, and an idempotency key. The service derives the authenticated user and reads price, currency, status, sales windows, and expiry from trusted server/database state. Inside one transaction it lazily expires overdue holds, locks the requested inventory rows in deterministic seat order with `SELECT … FOR UPDATE`, rechecks sales eligibility, creates the hold, conditionally changes every row from `AVAILABLE` to `HELD`, and writes all hold items. Any missing, cross-session, blocked, or contended seat aborts the transaction, so no partial selection remains.
@@ -91,6 +100,28 @@ Socket.IO is a standalone gateway consuming the Redis Stream. Web and organizer 
 
 Messages are invalidations, not inventory deltas. A client validates session/event identity, tolerates duplicates and stale order, then fetches a no-store PostgreSQL snapshot. Local selected seats are reconciled against that snapshot. Reconnect, Redis recovery, window focus, and low-frequency disconnected polling all trigger the same authoritative refresh path. The gateway never computes availability.
 
+## Phase 5A payment and booking boundary
+
+Checkout first commits an order and `PaymentAttempt` with a stable provider idempotency key. Only then does the service call the provider, outside a database transaction. A timeout leaves a retryable `CREATED` attempt; the same key produces the same intent on recovery. A provider create/retrieve response can update bounded diagnostic state but can never mark the order paid.
+
+The provider webhook route reads a bounded raw byte body and verifies its signature before parsing or storing normalized fields. The local development/test provider signs `timestamp.rawBody` with HMAC-SHA256 and compares fixed-size digests in constant time. Its deterministic intent and signed success/failure deliveries support automated and browser verification, but configuration rejects it in production. The `EXTERNAL` registry entry is an explicit deployment gate until a reviewed adapter and credentials exist.
+
+Webhook processing persists a unique `(provider, providerEventId)` observation and then locks the webhook, attempt, order, hold, and sorted inventory rows. It checks intent identity, amount, currency, first terminal state, ownership, session ancestry, live hold eligibility, and exact ordered inventory. A verified success atomically:
+
+1. marks the attempt succeeded and order paid;
+2. inserts one booking and exactly one booking seat per order item;
+3. changes those inventory rows from `HELD` to permanent `BOOKED`;
+4. changes the hold from `ACTIVE` to `CONVERTED`;
+5. marks the order `FULFILLED` and writes safe outbox invalidations.
+
+Unique constraints and deferred database checks make duplicate or concurrent distinct success events exact once. If payment is verified but fulfillment is unsafe, the order enters paid-unfulfilled/review state with a bounded safe code. Operators can reprocess the stored verified event; no command, redirect, or reconciliation response can fabricate success.
+
+Booked inventory has no transition back to available in Phase 5A. Session cancellation preserves confirmed bookings for future post-payment handling rather than silently refunding or releasing them.
+
+## Phase 5A operations and Redis independence
+
+Bounded commands initialize/retrieve pending provider intents, reprocess an internally stored verified webhook, expire unpaid checkouts, and report stale or paid-unfulfilled records. The admin health route exposes counts only. All booking writes and outbox inserts commit in PostgreSQL before Redis delivery. If Redis is unavailable, booking correctness is unchanged and outbox rows remain pending for the existing retrying dispatcher.
+
 ## Public query strategy
 
 Public services query only published events with future eligible sessions. They calculate persisted-domain view models containing earliest session, venue/city, minimum configured price, currency, capacity, and read-only map data. The seat-selection query maps inventory to `AVAILABLE`, `HELD_BY_YOU`, `UNAVAILABLE`, or `BLOCKED`; another customer's hold linkage is never serialized. Invalid, incomplete, cancelled, archived, and unpublished records are filtered out; there is no fixture fallback.
@@ -99,9 +130,11 @@ Phase 4B adds Redis transport and real-time invalidation without adding a Redis 
 
 ## Testing strategy
 
-- Unit tests cover event/session rules plus sales-window boundaries, hold lifecycle, totals, selection validation, idempotency matching, materialization, safe view models, and availability mapping.
+- Unit tests cover event/session rules plus sales-window boundaries, hold/checkout/payment lifecycle, integer totals, selection validation, idempotency matching, materialization, safe view models, and availability mapping.
 - Component tests cover organizer/customer forms and summaries, coordinate selection states, prices, maximum feedback, pending/conflict behavior, fake-time countdowns, and empty states.
 - PostgreSQL tests cover the Phase 0–3 baseline plus materialization, immutable snapshots, ownership, all-or-nothing acquisition, concurrency, idempotency, release, expiry, cancellation, and direct invariant violations.
 - Phase 4B PostgreSQL tests cover atomic outbox commit/rollback, every mutation integration, concurrent dispatch claiming, retry/backoff, and dead-letter lifecycle.
 - A separate mandatory real-Redis suite covers Streams publication/deduplication, cursor reconnect, signed room isolation, outage/recovery, and multi-worker BullMQ expiry.
-- The integration runners accept only a distinct `TEST_DATABASE_URL`, reset it, and apply the complete append-only migration chain through Phase 4B.
+- Phase 5A PostgreSQL tests cover ownership, immutable order snapshots, concurrent checkout idempotency, raw webhook verification, amount/currency mismatch, failure, duplicate/concurrent exact-once fulfillment, permanent booked inventory, rollback/reprocess, provider timeout recovery, and paid-unfulfilled outcomes.
+- A provider-contract suite covers deterministic create/retrieve/cancel, signed success/failure, delayed/duplicate delivery, tamper rejection, and production gating. The real-Redis suite also proves payment fulfillment commits once during dispatch outage and drains after recovery.
+- The integration runners accept only a distinct `TEST_DATABASE_URL`, reset it, and apply the complete append-only migration chain through Phase 5A.

@@ -26,7 +26,7 @@ describe("seat-map components", () => {
     render(<SeatMapRenderer sections={sections} />);
     expect(screen.getByText("Stage / screen")).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(
-      /checkout and booking are not available in Phase 4B/i,
+      /confirmed bookings appear only after verified payment/i,
     );
     const blockedSeat = screen.getByRole("img", {
       name: /Main, row A, seat 2: premium, blocked/i,

@@ -101,12 +101,14 @@ enum Currency {
 enum SeatInventoryState {
   AVAILABLE
   HELD
+  BOOKED
 }
 
 enum SeatHoldStatus {
   ACTIVE
   RELEASED
   EXPIRED
+  CONVERTED
 }
 
 enum InventoryEventType {
@@ -115,6 +117,55 @@ enum InventoryEventType {
   HOLD_RELEASED
   HOLD_EXPIRED
   SESSION_CANCELLED
+  CHECKOUT_CREATED
+  PAYMENT_INTENT_CREATED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  INVENTORY_BOOKED
+  BOOKING_CONFIRMED
+  PAYMENT_REQUIRES_REVIEW
+}
+
+enum CheckoutOrderStatus {
+  PENDING
+  PAYMENT_PENDING
+  PAID
+  FULFILLED
+  FAILED
+  CANCELLED
+  EXPIRED
+  PAID_UNFULFILLED
+  REQUIRES_REVIEW
+}
+
+enum PaymentProviderName {
+  LOCAL_SIGNED
+  EXTERNAL
+}
+
+enum PaymentAttemptStatus {
+  CREATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REQUIRES_REVIEW
+}
+
+enum PaymentWebhookSignatureStatus {
+  VERIFIED
+  INVALID
+}
+
+enum PaymentWebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  REQUIRES_REVIEW
+  FAILED
+}
+
+enum BookingStatus {
+  CONFIRMED
 }
 
 model User {
@@ -133,6 +184,8 @@ model User {
   venueAccessGrantsGranted VenueAccessGrant[] @relation("VenueAccessGrantedBy")
   venueAccessGrantsRevoked VenueAccessGrant[] @relation("VenueAccessRevokedBy")
   seatHolds                SeatHold[]
+  checkoutOrders           CheckoutOrder[]
+  bookings                 Booking[]
 }
 
 model Account {
@@ -197,6 +250,8 @@ model Organization {
   events                     Event[]            @relation("OrganizerEvents")
   organizerVenueAccessGrants VenueAccessGrant[] @relation("OrganizerVenueAccess")
   operatorVenueAccessGrants  VenueAccessGrant[] @relation("OperatorVenueAccess")
+  checkoutOrders             CheckoutOrder[]
+  bookings                   Booking[]
 
   @@index([kind])
 }
@@ -300,6 +355,8 @@ model SeatSection {
   rows                      SeatRow[]
   sessionPricingAssignments SessionSectionPricing[]
   sessionInventory          SessionSeatInventory[]
+  checkoutOrderItems        CheckoutOrderItem[]
+  bookingSeats              BookingSeat[]
 
   @@unique([seatMapId, code])
   @@index([seatMapId, displayOrder])
@@ -332,8 +389,10 @@ model Seat {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  row              SeatRow                @relation(fields: [rowId], references: [id], onDelete: Cascade)
-  sessionInventory SessionSeatInventory[]
+  row                SeatRow                @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  sessionInventory   SessionSeatInventory[]
+  checkoutOrderItems CheckoutOrderItem[]
+  bookingSeats       BookingSeat[]
 
   @@unique([rowId, label])
   @@index([rowId, displayOrder])
@@ -383,8 +442,10 @@ model Event {
   cancelledAt             DateTime?     @db.Timestamptz(3)
   archivedAt              DateTime?     @db.Timestamptz(3)
 
-  organizerOrganization Organization   @relation("OrganizerEvents", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
+  organizerOrganization Organization    @relation("OrganizerEvents", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
   sessions              EventSession[]
+  checkoutOrders        CheckoutOrder[]
+  bookings              Booking[]
 
   @@unique([organizerOrganizationId, slug])
   @@index([organizerOrganizationId, status])
@@ -418,6 +479,9 @@ model EventSession {
   seatInventory   SessionSeatInventory[]
   seatHolds       SeatHold[]
   inventoryEvents InventoryEventOutbox[]
+  checkoutOrders  CheckoutOrder[]
+  bookings        Booking[]
+  bookingSeats    BookingSeat[]
 
   @@index([eventId, status])
   @@index([eventId, startAt])
@@ -442,6 +506,8 @@ model SessionPriceTier {
   session            EventSession            @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   sectionAssignments SessionSectionPricing[]
   sessionInventory   SessionSeatInventory[]
+  checkoutOrderItems CheckoutOrderItem[]
+  bookingSeats       BookingSeat[]
 
   @@unique([sessionId, code])
   @@index([sessionId, displayOrder])
@@ -482,12 +548,14 @@ model SessionSeatInventory {
   createdAt     DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
 
-  session     EventSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  seat        Seat             @relation(fields: [seatId], references: [id], onDelete: Restrict)
-  section     SeatSection      @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  priceTier   SessionPriceTier @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
-  currentHold SeatHold?        @relation("HoldCurrentInventory", fields: [currentHoldId], references: [id], onDelete: Restrict)
-  holdItems   SeatHoldItem[]
+  session            EventSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seat               Seat                @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  section            SeatSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier          SessionPriceTier    @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+  currentHold        SeatHold?           @relation("HoldCurrentInventory", fields: [currentHoldId], references: [id], onDelete: Restrict)
+  holdItems          SeatHoldItem[]
+  checkoutOrderItems CheckoutOrderItem[]
+  bookingSeats       BookingSeat[]
 
   @@unique([sessionId, seatId])
   @@index([sessionId, state])
@@ -513,11 +581,13 @@ model SeatHold {
   updatedAt      DateTime       @updatedAt @db.Timestamptz(3)
   releasedAt     DateTime?      @db.Timestamptz(3)
   expiredAt      DateTime?      @db.Timestamptz(3)
+  convertedAt    DateTime?      @db.Timestamptz(3)
 
   session          EventSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
   user             User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   items            SeatHoldItem[]
   currentInventory SessionSeatInventory[] @relation("HoldCurrentInventory")
+  checkoutOrder    CheckoutOrder?
 
   @@unique([sessionId, userId, idempotencyKey])
   @@index([status, expiresAt])
@@ -540,6 +610,194 @@ model SeatHoldItem {
 
   @@unique([holdId, inventoryId])
   @@index([inventoryId])
+}
+
+// Immutable, server-priced checkout created from exactly one customer hold.
+// The public reference is unguessable and every ancestry field is protected by
+// PostgreSQL constraints/triggers in the Phase 5A migration.
+model CheckoutOrder {
+  id                String              @id @default(cuid())
+  publicReference   String              @unique
+  userId            String
+  organizationId    String
+  eventId           String
+  sessionId         String
+  sourceHoldId      String              @unique
+  status            CheckoutOrderStatus @default(PENDING)
+  currency          Currency
+  subtotalMinor     Int
+  totalMinor        Int
+  idempotencyKey    String
+  checkoutExpiresAt DateTime            @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(3)
+  paidAt            DateTime?           @db.Timestamptz(3)
+  fulfilledAt       DateTime?           @db.Timestamptz(3)
+  failedAt          DateTime?           @db.Timestamptz(3)
+  cancelledAt       DateTime?           @db.Timestamptz(3)
+  expiredAt         DateTime?           @db.Timestamptz(3)
+  safeFailureCode   String?
+  version           Int                 @default(0)
+
+  user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event           Event               @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session         EventSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  sourceHold      SeatHold            @relation(fields: [sourceHoldId], references: [id], onDelete: Restrict)
+  items           CheckoutOrderItem[]
+  paymentAttempts PaymentAttempt[]
+  booking         Booking?
+
+  @@unique([userId, sourceHoldId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([organizationId, status])
+  @@index([eventId, status])
+  @@index([sessionId, status])
+  @@index([status, checkoutExpiresAt])
+}
+
+model CheckoutOrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  inventoryId String
+  seatId      String
+  sectionId   String
+  priceTierId String
+  seatLabel   String
+  rowLabel    String
+  sectionName String
+  sectionCode String
+  tierName    String
+  tierCode    String
+  priceMinor  Int
+  currency    Currency
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  order     CheckoutOrder        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  inventory SessionSeatInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
+  seat      Seat                 @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  section   SeatSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier SessionPriceTier     @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, inventoryId])
+  @@unique([orderId, seatId])
+  @@index([inventoryId])
+  @@index([seatId])
+  @@index([sectionId])
+  @@index([priceTierId])
+}
+
+model PaymentAttempt {
+  id                     String               @id @default(cuid())
+  orderId                String
+  provider               PaymentProviderName
+  providerIntentId       String?
+  providerIdempotencyKey String               @unique
+  status                 PaymentAttemptStatus @default(CREATED)
+  amountMinor            Int
+  currency               Currency
+  lastProviderStatus     String?
+  safeFailureCode        String?
+  createdAt              DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime             @updatedAt @db.Timestamptz(3)
+  succeededAt            DateTime?            @db.Timestamptz(3)
+  failedAt               DateTime?            @db.Timestamptz(3)
+  cancelledAt            DateTime?            @db.Timestamptz(3)
+
+  order         CheckoutOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  webhookEvents PaymentWebhookEvent[]
+
+  @@unique([orderId, provider])
+  @@unique([provider, providerIntentId])
+  @@index([status, updatedAt])
+}
+
+model PaymentWebhookEvent {
+  id                  String                         @id @default(cuid())
+  provider            PaymentProviderName
+  providerEventId     String
+  eventType           String
+  providerIntentId    String
+  paymentAttemptId    String?
+  normalizedStatus    PaymentAttemptStatus
+  amountMinor         Int
+  currency            Currency
+  signatureStatus     PaymentWebhookSignatureStatus
+  processingStatus    PaymentWebhookProcessingStatus @default(RECEIVED)
+  receivedAt          DateTime                       @default(now()) @db.Timestamptz(3)
+  processedAt         DateTime?                      @db.Timestamptz(3)
+  providerOccurredAt  DateTime?                      @db.Timestamptz(3)
+  attemptCount        Int                            @default(0)
+  safeProcessingError String?
+  payloadHash         String                         @db.Char(64)
+
+  paymentAttempt PaymentAttempt? @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerEventId])
+  @@index([paymentAttemptId, receivedAt])
+  @@index([processingStatus, receivedAt])
+  @@index([provider, providerIntentId])
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  publicReference String        @unique
+  orderId         String        @unique
+  userId          String
+  organizationId  String
+  eventId         String
+  sessionId       String
+  status          BookingStatus @default(CONFIRMED)
+  currency        Currency
+  totalMinor      Int
+  confirmedAt     DateTime      @db.Timestamptz(3)
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+
+  order        CheckoutOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event        Event         @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session      EventSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seats        BookingSeat[]
+
+  @@index([userId, confirmedAt])
+  @@index([organizationId, confirmedAt])
+  @@index([eventId, confirmedAt])
+  @@index([sessionId, confirmedAt])
+}
+
+model BookingSeat {
+  id          String   @id @default(cuid())
+  bookingId   String
+  inventoryId String   @unique
+  sessionId   String
+  seatId      String
+  sectionId   String
+  priceTierId String
+  seatLabel   String
+  rowLabel    String
+  sectionName String
+  sectionCode String
+  tierName    String
+  tierCode    String
+  priceMinor  Int
+  currency    Currency
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  booking   Booking              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  inventory SessionSeatInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
+  session   EventSession         @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seat      Seat                 @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  section   SeatSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier SessionPriceTier     @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+
+  @@unique([bookingId, inventoryId])
+  @@unique([sessionId, seatId])
+  @@index([bookingId])
+  @@index([sessionId])
+  @@index([seatId])
+  @@index([sectionId])
+  @@index([priceTierId])
 }
 
 // Transactional inventory invalidations. These rows are committed in the same
