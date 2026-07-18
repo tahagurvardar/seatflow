@@ -23,9 +23,9 @@ export default async function CustomerBookingsPage() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Confirmed bookings</p>
             <h1 className="mt-3 text-4xl font-black tracking-[-0.05em] text-slate-950 sm:text-5xl">Your bookings</h1>
-            <p className="mt-3 text-slate-600">Confirmed seats and immutable prices. QR tickets are not part of this phase.</p>
+            <p className="mt-3 text-slate-600">Confirmed seats, immutable prices, and links to each issued ticket.</p>
           </div>
-          <Link href={ROUTES.events} className={buttonStyles({ variant: "outline", size: "sm" })}>Browse events</Link>
+          <div className="flex gap-2"><Link href={ROUTES.customerTickets} className={buttonStyles({ variant: "outline", size: "sm" })}>Your tickets</Link><Link href={ROUTES.events} className={buttonStyles({ variant: "outline", size: "sm" })}>Browse events</Link></div>
         </div>
         {bookings.length ? (
           <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

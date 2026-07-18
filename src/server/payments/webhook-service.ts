@@ -24,6 +24,10 @@ import type {
   NormalizedPaymentWebhookEvent,
   PaymentProvider,
 } from "@/server/payments/payment-provider";
+import {
+  attemptImmediateTicketIssuance,
+  enqueueTicketIssuance,
+} from "@/server/tickets/issuance-service";
 
 function generateBookingReference() {
   return randomBytes(24).toString("base64url");
@@ -60,6 +64,7 @@ export type WebhookProcessingResult =
 interface ProcessOptions {
   now?: Date;
   maximumPayloadBytes?: number;
+  ticketCredentialSecret?: string;
   /** Integration-test hook used only to prove that all fulfillment writes roll back. */
   beforeCommit?: () => Promise<void> | void;
 }
@@ -264,6 +269,7 @@ export async function processVerifiedWebhookRecord(
   options: ProcessOptions = {},
 ): Promise<WebhookProcessingResult> {
   const now = options.now ?? new Date();
+  let newlyConfirmedBookingId: string | null = null;
   try {
     await runInTransaction(
       database,
@@ -547,6 +553,8 @@ export async function processVerifiedWebhookRecord(
             createdAt: now,
           })),
         });
+        await enqueueTicketIssuance(transaction, booking.id, now);
+        newlyConfirmedBookingId = booking.id;
         const booked = await transaction.sessionSeatInventory.updateMany({
           where: {
             id: { in: inventoryIds },
@@ -614,6 +622,14 @@ export async function processVerifiedWebhookRecord(
       },
       { timeout: 30_000 },
     );
+    const credentialSecret = options.ticketCredentialSecret ?? process.env.TICKET_CREDENTIAL_SECRET;
+    if (newlyConfirmedBookingId && credentialSecret) {
+      await attemptImmediateTicketIssuance(database, {
+        bookingId: newlyConfirmedBookingId,
+        credentialSecret,
+        now,
+      });
+    }
   } catch (error) {
     if (error instanceof PaymentWebhookSignatureError) throw error;
     await database.paymentWebhookEvent.updateMany({

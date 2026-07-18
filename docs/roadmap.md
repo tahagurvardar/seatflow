@@ -76,15 +76,21 @@ Phase 4B deliberately leaves every allocation decision in PostgreSQL and impleme
 
 ## Phase 5B — Tickets and post-payment lifecycle
 
-- Secure digital ticket issuance and retrieval
-- QR/barcode credentials with rotation/revocation semantics
-- Refund, cancellation, chargeback, and dispute foundations
-- Email delivery and customer-support workflows
-- Reviewed production payment-provider adapter and deployment verification
+**Status: complete.**
+
+- Durable one-ticket-per-booked-seat issuance with independent retry and backlog operations
+- Opaque hash-only QR credentials with linked rotation, terminal revocation, and immutable audit history
+- Owner-only ticket/QR views plus short-lived, owner-bound, single-use PDF grants
+- Online session-bound entry scanning with tenant authorization and atomic first-use redemption
+- Transactional notification outbox, provider idempotency, deterministic local capture, retries, and dead letters
+- Protected operational health plus issuance, delivery, scan-outcome, rotation, and revocation commands
 
 ## Phase 6 — Operations and scale
 
-- Organizer reporting, venue operations, and entry scanning
-- Notifications, customer support, and admin workflows
-- Observability, rate limiting, abuse prevention, and incident playbooks
-- Performance and accessibility hardening under realistic inventory load
+- Reviewed production payment and notification adapters with credential rotation/runbooks
+- Refund, cancellation, chargeback, and dispute workflows that preserve booked-seat and ticket history
+- Distributed scan abuse controls, fleet/device identity, and offline-policy product decisions
+- Delivery/issuance dashboards, structured observability, alerting, and customer-support tools
+- End-to-end accessibility, load, resilience, backup/restore, and incident-response verification
+
+This recommended next phase is not started in the current repository.

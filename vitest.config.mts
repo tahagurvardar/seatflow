@@ -10,7 +10,13 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.{ts,tsx}"],
-    exclude: ["tests/integration/**", "tests/redis/**", "node_modules/**"],
+    exclude: [
+      "tests/integration/**",
+      "tests/notification/**",
+      "tests/pdf/**",
+      "tests/redis/**",
+      "node_modules/**",
+    ],
     coverage: {
       reporter: ["text", "html"],
     },

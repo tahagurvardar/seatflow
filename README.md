@@ -1,6 +1,6 @@
 # SeatFlow
 
-SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 5A: checkout, cryptographically verified payment processing, and exact-once booking**, built on the PostgreSQL-authoritative inventory, hold, and transactional-outbox foundation.
+SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 5B: secure ticket issuance, delivery, and authoritative entry validation**, built on exact-once payment and booking fulfillment.
 
 Every authenticated user remains a customer. Platform privilege is deliberately narrow (`USER` or `ADMIN`); organizer and venue-operator capability comes from organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
 
@@ -36,12 +36,19 @@ Every authenticated user remains a customer. Platform privilege is deliberately 
 - Exact-once booking fulfillment that converts the hold, permanently marks inventory `BOOKED`, and writes booking/outbox records atomically
 - Customer checkout status and booking history/detail pages plus organizer aggregate booking summaries
 - Reconciliation, verified-webhook reprocessing, stale-checkout expiry, and paid-but-unfulfilled operational reporting
+- Retry-safe one-ticket-per-booked-seat issuance with immutable ticket ancestry and hash-only credential persistence
+- Versioned HMAC-derived QR credentials with rotation, terminal revocation, atomic first-use redemption, and append-only scan history
+- Owner-only customer ticket pages, protected QR rendering, and short-lived, owner-bound, single-use booking PDF grants
+- Server-rendered bounded PDFs with one ticket and QR per page and no remote asset fetches
+- Transactional notification outbox delivery with deterministic local capture, provider idempotency, attempt history, backoff, and dead letters
+- Mobile organizer scanning with camera support, manual fallback, strict tenant authorization, and honest online-only validation
+- Ticket issuance, notification, scan-outcome, rotation, revocation, backlog, and protected health operations
 - Coordinate-based customer seat selection, owner-safe hold details/countdowns, dashboard summaries, and aggregate organizer inventory counts
 - Database-backed public catalogue, featured content, and true event-detail 404 behavior with no mock fallback
 - Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
 - Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Phase 5A intentionally stops at confirmed bookings. It does **not** issue tickets or QR codes, collect raw card details, process refunds, coupons, chargebacks, email delivery, waitlists, dynamic pricing, scanning, or sales analytics. Client redirects and Redis messages never mark an order paid or create a booking; only a verified provider webhook can authorize payment success.
+Phase 5B does **not** process refunds, chargebacks/disputes, coupons, waitlists, dynamic pricing, taxes/fees, split tender, raw card data, or sales analytics. The checked-in payment and notification providers are deterministic local development/test adapters and are rejected in production; reviewed external adapters remain deployment gates. Client redirects and Redis messages never authorize payment, ticket issuance, or entry.
 
 ## Main routes
 
@@ -53,13 +60,16 @@ Phase 5A intentionally stops at confirmed bookings. It does **not** issue ticket
 | `/customer/holds/[holdToken]` | Owner-only active/released/expired hold detail and manual release |
 | `/customer/checkouts/[orderReference]` | Owner-only checkout status; simulated payment controls exist only outside production |
 | `/customer/bookings` | Authenticated customer's confirmed booking history |
-| `/customer/bookings/[bookingReference]` | Owner-only booking and booked-seat detail; explicitly not a ticket |
+| `/customer/bookings/[bookingReference]` | Owner-only booking, booked-seat, ticket, and booking-PDF actions |
+| `/customer/tickets` | Authenticated customer's issued tickets |
+| `/customer/tickets/[ticketReference]` | Owner-only ticket detail with protected QR and PDF action |
 | `/events/[slug]/sessions/[sessionId]/seats` | Public availability preview; authenticated customers can select and hold seats |
 | `/organizer/dashboard` | Organizer tenant selection and real Phase 3 counts |
 | `/organizer/organizations/[organizationSlug]/events` | Organizer event list and management entry point |
 | `.../events/new`, `.../events/[eventSlug]/edit` | Authorized draft event creation/editing |
 | `.../events/[eventSlug]/sessions/new` | Session creation from approved venues and published maps |
 | `.../sessions/[sessionId]` | Session lifecycle, pricing coverage, aggregate inventory, and bound-map preview |
+| `.../sessions/[sessionId]/scanner` | Organizer OWNER/ADMIN mobile entry scanner for the bound session |
 | `.../sessions/[sessionId]/pricing` | Draft tier and section-pricing configuration |
 | `.../events/[eventSlug]/preview` | Organizer publication preview |
 | `/organizer/organizations/[organizationSlug]/venues` | Approved venue/space/published-map information |
@@ -74,6 +84,10 @@ Phase 5A intentionally stops at confirmed bookings. It does **not** issue ticket
 | `/api/operations/inventory/health` | Platform-admin-only non-sensitive Phase 4B health and metrics |
 | `/api/payments/webhooks/[provider]` | Raw-body provider webhook ingress with signature verification before parsing/persistence |
 | `/api/operations/payments/health` | Platform-admin-only non-sensitive Phase 5A health counts |
+| `/api/tickets/[ticketReference]/qr` | Owner-only, no-store SVG credential QR |
+| `/api/tickets/download/[token]` | Authenticated, owner-bound, single-use booking PDF download |
+| `/api/tickets/validate` | Authenticated, rate-limited, tenant-authorized entry validation |
+| `/api/operations/tickets/health` | Platform-admin-only non-sensitive issuance and delivery health counts |
 
 ## Local setup
 
@@ -114,12 +128,20 @@ npm run payments:reconcile
 npm run payments:webhook:reprocess -- --event-id=<internal-webhook-id>
 npm run payments:report
 npm run checkouts:expire
+npm run tickets:issue
+npm run tickets:report
+npm run tickets:retry -- --request-id=<internal-request-id>
+npm run tickets:manage -- --action=rotate --ticket-reference=<reference> --actor-email=<email>
+npm run notifications:dispatch
+npm run notifications:retry
 npm run lint
 npm run typecheck
 npm test
 npm run test:integration
 npm run test:redis
 npm run test:provider
+npm run test:notification
+npm run test:pdf
 npm run build
 ```
 
@@ -130,6 +152,8 @@ npm run build
 `npm run inventory:dispatch` processes one bounded outbox batch; `npm run inventory:dispatcher` runs continuously. `npm run holds:schedule` idempotently registers the BullMQ repeat schedule, `npm run holds:worker` consumes it, and `npm run realtime:gateway` serves signed session rooms. The manual expiry command remains supported. See the [Phase 4B operations guide](docs/phase-4b-operations.md) for rollout, health, Redis outage, and production process requirements.
 
 `npm run payments:reconcile -- --limit=100` initializes or refreshes pending provider intents but deliberately cannot grant payment success. `npm run payments:webhook:reprocess` accepts only an internally stored, verified webhook ID. Use `npm run payments:report` for paid-unfulfilled/stale queues and `npm run checkouts:expire -- --batch-size=100 --max-batches=10` for bounded unpaid expiry. See the [Phase 5A operations guide](docs/phase-5a-operations.md) before deployment or incident recovery.
+
+`npm run tickets:issue` processes one bounded issuance batch and is safe to repeat. `npm run notifications:dispatch` processes one bounded notification batch; `npm run notifications:retry` makes eligible pending failures immediately due. Management commands re-authorize the supplied actor and never print a credential. Use `npm run tickets:report` and the protected health route for backlogs. See the [Phase 5B operations guide](docs/phase-5b-operations.md) before rollout, secret rotation, or incident recovery.
 
 ## Administrator bootstrap
 
@@ -154,4 +178,4 @@ tests/integration/            Dedicated PostgreSQL integration tests
 docs/                         Product, architecture, security, operations, roadmap
 ```
 
-See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [Phase 5A operations](docs/phase-5a-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [Phase 5A operations](docs/phase-5a-operations.md), [Phase 5B operations](docs/phase-5b-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).

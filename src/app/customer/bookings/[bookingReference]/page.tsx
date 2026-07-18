@@ -11,6 +11,9 @@ import { requireAuth } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
 import { getCustomerBookingByReference } from "@/server/payments/booking-queries";
 import { CheckoutAuthorizationError } from "@/server/payments/errors";
+import { listCustomerBookingTickets } from "@/server/tickets/ticket-queries";
+import { TicketSummaryCard } from "@/components/tickets/ticket-summary-card";
+import { PdfDownloadButton } from "@/components/tickets/pdf-download-button";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Booking detail" };
@@ -26,6 +29,10 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
     if (error instanceof CheckoutAuthorizationError) notFound();
     throw error;
   }
+  const tickets = await listCustomerBookingTickets(getDatabase(), {
+    userId: auth.user.id,
+    bookingReference,
+  });
   return (
     <Section className="bg-slate-50">
       <Container className="max-w-3xl">
@@ -48,7 +55,10 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           </ul>
           <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-4"><span className="text-sm font-bold uppercase tracking-wide text-slate-500">Confirmed total</span><span className="text-2xl font-black text-slate-950">{formatMinorCurrency(booking.totalMinor, booking.currency)}</span></div>
         </section>
-        <p className="mt-5 rounded-2xl bg-slate-100 p-4 text-sm text-slate-700">This is a booking record, not a ticket. QR codes, PDF tickets, scanning, and email delivery are intentionally excluded from Phase 5A.</p>
+        <section className="mt-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Issued credentials</p><h2 className="mt-1 text-2xl font-black text-slate-950">Tickets</h2></div>{tickets.length ? <PdfDownloadButton bookingReference={booking.publicReference} size="sm" /> : null}</div>
+          {tickets.length ? <div className="mt-4 grid gap-4 sm:grid-cols-2">{tickets.map((ticket) => <TicketSummaryCard key={ticket.publicReference} ticket={ticket} />)}</div> : <p className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">This confirmed booking is waiting for secure ticket issuance. The booking remains valid while operations retries the idempotent issuance request.</p>}
+        </section>
       </Container>
     </Section>
   );
