@@ -126,6 +126,52 @@ const paymentEnvironmentSchema = z
     }
   });
 
+const ticketEnvironmentSchema = z.object({
+  TICKET_CREDENTIAL_SECRET: z.string().min(32).max(512),
+  TICKET_ENTRY_EARLY_MINUTES: z.coerce.number().int().min(0).max(1_440).default(120),
+  TICKET_ENTRY_LATE_MINUTES: z.coerce.number().int().min(0).max(1_440).default(240),
+  TICKET_DOWNLOAD_GRANT_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
+  TICKET_SCAN_MAX_BYTES: z.coerce.number().int().min(256).max(8_192).default(2_048),
+  TICKET_SCAN_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(300).default(120),
+  TICKET_ISSUANCE_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+  TICKET_ISSUANCE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(25).default(8),
+  TICKET_ISSUANCE_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
+  TICKET_ISSUANCE_BACKOFF_MAX_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(300_000),
+});
+
+const notificationEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    NOTIFICATION_PROVIDER: z.enum(["LOCAL_FILE", "EXTERNAL"]),
+    LOCAL_EMAIL_CAPTURE_DIR: z
+      .string()
+      .min(1)
+      .max(260)
+      .regex(/^[A-Za-z0-9._/-]+$/, "contains unsupported path characters")
+      .refine((value) => !value.split(/[\\/]/).includes(".."), "must not traverse parent directories")
+      .optional(),
+    NOTIFICATION_DISPATCH_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+    NOTIFICATION_DISPATCH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(25).default(8),
+    NOTIFICATION_DISPATCH_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
+    NOTIFICATION_DISPATCH_BACKOFF_MAX_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(300_000),
+  })
+  .superRefine((environment, context) => {
+    if (environment.NOTIFICATION_PROVIDER === "LOCAL_FILE" && !environment.LOCAL_EMAIL_CAPTURE_DIR) {
+      context.addIssue({
+        code: "custom",
+        path: ["LOCAL_EMAIL_CAPTURE_DIR"],
+        message: "is required for the local file notification provider",
+      });
+    }
+    if (environment.NODE_ENV === "production" && environment.NOTIFICATION_PROVIDER === "LOCAL_FILE") {
+      context.addIssue({
+        code: "custom",
+        path: ["NOTIFICATION_PROVIDER"],
+        message: "LOCAL_FILE is forbidden in production",
+      });
+    }
+  });
+
 export type ApplicationEnvironment = z.infer<
   typeof applicationEnvironmentSchema
 >;
@@ -133,6 +179,8 @@ export type InventoryEventEnvironment = z.infer<
   typeof inventoryEventEnvironmentSchema
 >;
 export type PaymentEnvironment = z.infer<typeof paymentEnvironmentSchema>;
+export type TicketEnvironment = z.infer<typeof ticketEnvironmentSchema>;
+export type NotificationEnvironment = z.infer<typeof notificationEnvironmentSchema>;
 
 function formatEnvironmentError(scope: string, error: z.ZodError) {
   const details = error.issues
@@ -240,6 +288,26 @@ export function readPaymentEnvironment(
   const result = paymentEnvironmentSchema.safeParse(source);
   if (!result.success) {
     throw formatEnvironmentError("SeatFlow payment provider", result.error);
+  }
+  return result.data;
+}
+
+export function readTicketEnvironment(
+  source: EnvironmentSource = process.env,
+): TicketEnvironment {
+  const result = ticketEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow tickets", result.error);
+  }
+  return result.data;
+}
+
+export function readNotificationEnvironment(
+  source: EnvironmentSource = process.env,
+): NotificationEnvironment {
+  const result = notificationEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow notification provider", result.error);
   }
   return result.data;
 }

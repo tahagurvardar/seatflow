@@ -1,4 +1,4 @@
-# SeatFlow Phase 5A security contract
+# SeatFlow Phase 5B security contract
 
 ## Trust boundaries
 
@@ -18,6 +18,9 @@
 - Checkout actions accept only an owned hold token and idempotency key. Price, currency, total, user ID, provider status, order status, and booking state are server/database owned.
 - A client redirect, query parameter, provider-create response, reconciliation response, Redis message, or browser callback is never payment authority. Only a cryptographically verified provider webhook can authorize success.
 - Customer checkout and booking reads require both an authenticated user and matching ownership; public references are not bearer credentials.
+- Customer ticket, QR, and PDF reads require an authenticated matching owner; neither a ticket reference nor a download token alone grants access.
+- Scanner authorization is resolved against the target session before credential lookup. Organizer or venue-operator scope never grants customer ticket ownership.
+- Ticket reference, QR credential, download grant, scanner session, idempotency key, rotation reason, and actor email are untrusted inputs with explicit bounds.
 
 Better Auth stores HTTP-only PostgreSQL sessions using the `seatflow` cookie prefix. Production enables secure cookies; origin and CSRF protections remain enabled.
 
@@ -41,6 +44,11 @@ Application services validate full ancestry and lifecycle inside transactions. P
 - unique provider event identity, stable provider idempotency, first-terminal payment behavior, and immutable normalized webhook observations
 - one booking per order, one booking seat per inventory row, one physical seat per session, and deferred exact order-to-booking fulfillment
 - `BOOKED` inventory only after its booking seat exists, no transition out of `BOOKED`, and exact hold conversion
+- one ticket per booked seat, immutable booking/event/session/organization ancestry, and one active credential per ticket
+- keyed credential and grant hash grammar, legal credential replacement links, terminal ticket/credential state, and no terminal revival
+- one accepted redemption per ticket, scanner/idempotency uniqueness, and append-only redemption/audit/delivery-attempt history
+- owner-bound, expiring, mutually exclusive used/revoked download grants with immutable identity
+- notification recipient/resource ancestry, strict terminal outbox lifecycle, bounded deduplication, and no raw credential fields
 
 Repeated publish/revoke requests are safe. Unique/exclusion races are mapped to domain errors where practical and cannot leave partially published configuration.
 
@@ -88,6 +96,20 @@ Verified webhook fulfillment re-locks every authoritative record and verifies pr
 
 The success page queries PostgreSQL. It may show pending, failed, review, or confirmed state, and shows confirmed only after a stored `CONFIRMED` booking exists. A confirmed booking summary contains event/session/venue and seat labels but is explicitly not a ticket or entry credential.
 
+## Phase 5B ticket and delivery boundaries
+
+Ticket issuance is driven only by a unique durable request tied to a confirmed booking. It rechecks exact booked-seat ancestry and creates one ticket per seat under database uniqueness. Issuance exceptions occur after booking commit, are reduced to bounded safe codes, and retry without changing payment state. A notification failure is further downstream and can never revoke, duplicate, or delay the validity of an issued ticket.
+
+Ticket public references and download tokens use CSPRNG entropy. QR credentials are opaque, versioned HMAC derivations using a dedicated `TICKET_CREDENTIAL_SECRET`; the stored value is a separate keyed HMAC hash and comparisons use fixed-size constant-time comparison. The secret must not be reused for Better Auth, payment webhooks, Redis, or database access. Rotation invalidates the old version and links history. Revocation and first accepted use are terminal.
+
+The scanner endpoint bounds both declared and actual body size, validates a narrow schema, requires authentication, applies a bounded rate limit, and authorizes the target session before looking up a credential. PostgreSQL time, read as an unambiguous Unix epoch, decides the entry window. Credential and ticket row locks plus uniqueness make concurrent scans single-use. Rejected unknown input records only a safe outcome/reason and never persists the submitted credential or its hash. Responses contain only minimal event/seat context after an authorized lookup.
+
+QR and PDF responses use `no-store`, private/no-cache headers and restrictive content types. QR retrieval is unavailable after use or revocation, and terminal PDF pages display status without regenerating old QR material. PDF rendering accepts a bounded server-built view (one to eight tickets), embeds generated active QR bytes, and performs no remote fetch. Download grants are random, hash-only, owner-bound, short-lived, single-use, and locked before consumption; rendering failure rolls the consumption transaction back.
+
+Notification payloads contain only bounded template context and relational IDs, never a credential, QR image, auth cookie, or reusable download token. A grant is minted just in time and placed in the provider message, while only its hash remains in PostgreSQL. Provider idempotency uses the stable outbox ID; delivery attempts are append-only. Header values and recipients reject control characters. Local capture paths are server-configured and the local provider is rejected in production.
+
+The scan limiter is process-local and therefore defense in depth, not a production distributed abuse-control claim. A multi-instance deployment should add a reviewed shared edge/distributed rate limiter while retaining all database authorization and single-use invariants.
+
 ## Operations and incident safety
 
 Reconciliation may create/retrieve provider intents and store a bounded provider status, but even a provider-reported success remains `awaitingVerifiedWebhook`. Verified-webhook reprocessing accepts an internal stored webhook ID and refuses unverified records. Paid-but-unfulfilled rows are preserved for operator review; Phase 5A has no automatic refund or inventory release path.
@@ -96,4 +118,4 @@ Redis failure occurs after the PostgreSQL transaction boundary. A verified booki
 
 ## Current security limitations
 
-Email verification, password reset delivery, invitations, audit-log UI, distributed HTTP rate limiting, broader abuse controls, and stronger administrator lifecycle controls remain future work. Phase 5A has no production external-provider adapter, ticket/QR/scan credential, refund, chargeback/dispute, coupon, email, waitlist, dynamic-pricing, tax/fee, or raw-card security model. The local signed provider is simulated development/test infrastructure only. PostgreSQL state, verified webhook authority, and server time remain decisive.
+Email verification, password reset delivery, invitations, support/audit-log UI, distributed HTTP rate limiting, broader abuse controls, and stronger administrator lifecycle controls remain future work. Phase 5B has no production external payment or notification adapter and no refund, chargeback/dispute, coupon, waitlist, dynamic-pricing, tax/fee, or raw-card security model. Local signed payment and local file notification providers are development/test infrastructure only. PostgreSQL state, verified webhook authority, database time, and online scan validation remain decisive.

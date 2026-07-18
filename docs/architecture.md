@@ -2,7 +2,7 @@
 
 ## Architectural style
 
-SeatFlow is a modular monolith on Next.js 16 App Router with separate Node worker and realtime processes. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, holds, checkout, payment observations, bookings, and the transactional delivery hand-off.
+SeatFlow is a modular monolith on Next.js 16 App Router with separate Node worker and realtime processes. `src/app` composes routes and Server Actions, `src/components` owns UI, `src/features` owns Zod and deterministic domain rules, `src/lib` owns request-aware infrastructure, and `src/server` owns framework-light services. Prisma/PostgreSQL is authoritative for identity, tenancy, venue layouts, events, sessions, pricing, per-session inventory, holds, checkout, payment observations, bookings, tickets, redemption history, and transactional delivery hand-offs.
 
 Database and Better Auth clients initialize lazily, so code generation and production builds do not require a live connection. Protected pages and every action perform fresh server-side authorization.
 
@@ -42,6 +42,14 @@ erDiagram
   CHECKOUT_ORDER ||--o| BOOKING : fulfills
   BOOKING ||--|{ BOOKING_SEAT : contains
   SESSION_SEAT_INVENTORY ||--o| BOOKING_SEAT : permanently_allocates
+  BOOKING ||--o| TICKET_ISSUANCE_REQUEST : schedules
+  BOOKING_SEAT ||--o| TICKET : issues
+  TICKET ||--|{ TICKET_CREDENTIAL : versions
+  TICKET ||--o{ TICKET_REDEMPTION_EVENT : records
+  BOOKING ||--o{ TICKET_DOWNLOAD_GRANT : grants
+  TICKET ||--o{ TICKET_AUDIT_EVENT : audits
+  BOOKING ||--o{ NOTIFICATION_OUTBOX : notifies
+  NOTIFICATION_OUTBOX ||--o{ NOTIFICATION_DELIVERY_ATTEMPT : attempts
 ```
 
 Events belong to organizer organizations. Venues belong to venue-operator organizations. `VenueAccessGrant` is the deliberate relationship between those tenancy boundaries and records both parties, the venue, status, timestamps, and grant/revoke actors. Active duplicates are prevented by a PostgreSQL partial unique index; grant history is append-only.
@@ -122,6 +130,32 @@ Booked inventory has no transition back to available in Phase 5A. Session cancel
 
 Bounded commands initialize/retrieve pending provider intents, reprocess an internally stored verified webhook, expire unpaid checkouts, and report stale or paid-unfulfilled records. The admin health route exposes counts only. All booking writes and outbox inserts commit in PostgreSQL before Redis delivery. If Redis is unavailable, booking correctness is unchanged and outbox rows remain pending for the existing retrying dispatcher.
 
+## Phase 5B issuance and credential boundary
+
+Verified fulfillment creates a unique `TicketIssuanceRequest` in the booking transaction. Issuance runs after commit and can also be drained by a bounded worker. It locks one due request, verifies the confirmed booking and exact booked-seat ancestry, then upserts one `Ticket` per `BookingSeat`, creates credential version 1, and enqueues one booking-ready notification. Request status, attempt count, safe error code, exponential backoff, and dead-letter state make failure visible without rolling back payment or booking.
+
+A ticket public reference is 192 bits of CSPRNG entropy. The QR credential is a versioned opaque HMAC-SHA256 derivation from the dedicated ticket secret, public reference, and credential version. Only a second keyed HMAC hash is stored. One partial unique index allows one active credential per ticket; another allows at most one accepted redemption. Credential history links a replaced version to its newer successor. Database triggers freeze ticket ancestry and terminal ticket, credential, redemption, grant, and audit history.
+
+Credential rotation creates the successor before connecting the prior version inside one transaction; a deferred constraint verifies that every `REPLACED` credential ultimately points to a newer version of the same ticket. Revocation changes both active credential and ticket terminally and writes a bounded audit reason. Management requires platform ADMIN or organizer OWNER/ADMIN and never returns or logs plaintext.
+
+## Entry validation
+
+The validation route accepts a bounded credential, target session, and idempotency key from an authenticated scanner. Authorization for the target session occurs before credential lookup: organizer OWNER/ADMIN is allowed, as is venue-operator OWNER/ADMIN for the session's venue. A per-process request limiter is defense in depth; authorization and database uniqueness remain decisive.
+
+Inside one transaction the service reads database time as Unix epoch milliseconds, locks the credential then ticket, verifies its keyed hash, session binding, session lifecycle, configurable entry window, and terminal state, then appends a redemption outcome. The first valid scan changes ticket and credential to `USED`; concurrent scans converge to one `ACCEPTED` and one `ALREADY_USED`. Unknown credential attempts store no credential hash or plaintext. Offline acceptance is deliberately unsupported.
+
+## Protected QR and PDF delivery
+
+Customer ticket queries always bind public reference to the authenticated owner. The QR endpoint re-derives and integrity-checks only the current active credential, returns a no-store SVG with a restrictive content-security policy, and never exposes an internal database ID. Used, revoked, and replaced credentials are not rendered as reusable QR codes.
+
+A PDF action creates a 256-bit random download token but stores only its keyed hash. The grant is bound to user and booking, short-lived, and single-use. Consumption first resolves ownership, locks the grant, rechecks database time and confirmed-booking ancestry, renders the bytes, and only then commits `usedAt`; concurrent/replayed downloads return not found. `pdf-lib` and `qrcode` render one bounded ticket per page with embedded assets only, so untrusted URLs cannot trigger server-side fetches.
+
+## Notification delivery
+
+Ticket-ready, credential-rotated, and revoked events enter `NotificationOutbox` through the same PostgreSQL transaction as their domain mutation. Concurrent dispatchers partition due rows with `SKIP LOCKED`. A just-in-time PDF grant is included in a context-only email; credentials and QR payloads never enter the outbox or message body. The grant token and provider idempotency key are stable for one attempt (including a crash retry) and change only after a committed failed attempt. Every result records an append-only attempt. Success terminates delivery, transient failure schedules bounded exponential backoff, and permanent/final failure dead-letters without affecting ticket validity.
+
+`LOCAL_FILE` writes deterministic development/test captures with strict header and recipient validation and is forbidden in production. `EXTERNAL` is an explicit deployment gate until a reviewed provider adapter is installed. Notification operations are independent of Redis.
+
 ## Public query strategy
 
 Public services query only published events with future eligible sessions. They calculate persisted-domain view models containing earliest session, venue/city, minimum configured price, currency, capacity, and read-only map data. The seat-selection query maps inventory to `AVAILABLE`, `HELD_BY_YOU`, `UNAVAILABLE`, or `BLOCKED`; another customer's hold linkage is never serialized. Invalid, incomplete, cancelled, archived, and unpublished records are filtered out; there is no fixture fallback.
@@ -137,4 +171,6 @@ Phase 4B adds Redis transport and real-time invalidation without adding a Redis 
 - A separate mandatory real-Redis suite covers Streams publication/deduplication, cursor reconnect, signed room isolation, outage/recovery, and multi-worker BullMQ expiry.
 - Phase 5A PostgreSQL tests cover ownership, immutable order snapshots, concurrent checkout idempotency, raw webhook verification, amount/currency mismatch, failure, duplicate/concurrent exact-once fulfillment, permanent booked inventory, rollback/reprocess, provider timeout recovery, and paid-unfulfilled outcomes.
 - A provider-contract suite covers deterministic create/retrieve/cancel, signed success/failure, delayed/duplicate delivery, tamper rejection, and production gating. The real-Redis suite also proves payment fulfillment commits once during dispatch outage and drains after recovery.
-- The integration runners accept only a distinct `TEST_DATABASE_URL`, reset it, and apply the complete append-only migration chain through Phase 5A.
+- Phase 5B PostgreSQL tests cover exact issuance, issuance failure/retry, ancestry invariants, rotation/revocation, first-use and concurrent scans, cross-tenant/session denial, append-only history, grant ownership/expiry/replay, delivery retry/dead letter, and concurrent dispatcher deduplication.
+- Dedicated notification-provider and PDF parsing suites verify deterministic idempotency, timeout/failure classification, production gating, page count, extracted text, QR images, and input bounds.
+- The integration runners accept only a distinct `TEST_DATABASE_URL`, reset it, and apply the complete append-only migration chain through Phase 5B.

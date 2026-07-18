@@ -175,7 +175,7 @@ export default async function CustomerDashboardPage() {
               <EmptyState
                 icon="ticket"
                 title="No active seat holds"
-                description="When you hold seats for a session they appear here with a live countdown. Checkout can convert an active hold into a confirmed booking; tickets arrive in Phase 5B."
+                description="When you hold seats for a session they appear here with a live countdown. Checkout can convert an active hold into a confirmed booking, then secure tickets appear in your account."
                 action={
                   <Link href={ROUTES.events} className={buttonStyles({ size: "sm" })}>
                     Browse events

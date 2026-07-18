@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readSafeTestDatabaseUrl } from "../src/env/schema";
 
 const command = process.argv[2];
+const testArguments = process.argv.slice(3);
 
 if (!command || !["migrate", "reset", "test"].includes(command)) {
   console.error("Usage: tsx scripts/test-database.ts <migrate|reset|test>");
@@ -53,5 +54,6 @@ if (command === "test") {
     "run",
     "--config",
     "vitest.integration.config.mts",
+    ...testArguments,
   ], testEnvironment);
 }

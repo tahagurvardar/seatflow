@@ -14,6 +14,7 @@ export const ROUTES = {
   register: "/register",
   customerDashboard: "/customer/dashboard",
   customerBookings: "/customer/bookings",
+  customerTickets: "/customer/tickets",
   organizerDashboard: "/organizer/dashboard",
   organizerOnboarding: "/organizer/onboarding",
   venueOperatorDashboard: "/venue-operator/dashboard",
@@ -27,6 +28,10 @@ export const ROUTES = {
     `/customer/checkouts/${orderReference}` as const,
   customerBooking: (bookingReference: string) =>
     `/customer/bookings/${bookingReference}` as const,
+  customerTicket: (ticketReference: string) =>
+    `/customer/tickets/${ticketReference}` as const,
+  customerTicketQr: (ticketReference: string) =>
+    `/api/tickets/${ticketReference}/qr` as const,
   organizerEvents: (organizationSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events` as const,
   organizerNewEvent: (organizationSlug: string) =>
@@ -57,6 +62,12 @@ export const ROUTES = {
     sessionId: string,
   ) =>
     `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/${sessionId}/pricing` as const,
+  organizerScanner: (
+    organizationSlug: string,
+    eventSlug: string,
+    sessionId: string,
+  ) =>
+    `/organizer/organizations/${organizationSlug}/events/${eventSlug}/sessions/${sessionId}/scanner` as const,
   organizerEventPreview: (organizationSlug: string, eventSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events/${eventSlug}/preview` as const,
   organizerApprovedVenues: (organizationSlug: string) =>
@@ -103,6 +114,8 @@ export const PROTECTED_ROUTES = [
   "/customer/checkouts/[orderReference]",
   ROUTES.customerBookings,
   "/customer/bookings/[bookingReference]",
+  ROUTES.customerTickets,
+  "/customer/tickets/[ticketReference]",
   ROUTES.organizerDashboard,
   ROUTES.organizerOnboarding,
   ROUTES.venueOperatorDashboard,

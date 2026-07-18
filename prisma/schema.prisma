@@ -168,6 +168,71 @@ enum BookingStatus {
   CONFIRMED
 }
 
+enum TicketStatus {
+  ACTIVE
+  REVOKED
+  USED
+}
+
+enum TicketCredentialStatus {
+  ACTIVE
+  REVOKED
+  REPLACED
+  USED
+}
+
+enum TicketRedemptionOutcome {
+  ACCEPTED
+  ALREADY_USED
+  REVOKED
+  INVALID
+  WRONG_SESSION
+  TOO_EARLY
+  TOO_LATE
+  SESSION_CANCELLED
+  UNAUTHORIZED_SCANNER
+}
+
+enum TicketDownloadGrantPurpose {
+  BOOKING_PDF
+}
+
+enum TicketIssuanceRequestStatus {
+  PENDING
+  COMPLETED
+  DEAD_LETTER
+}
+
+enum TicketAuditAction {
+  ISSUED
+  CREDENTIAL_ROTATED
+  REVOKED
+}
+
+enum NotificationType {
+  BOOKING_TICKETS_READY
+  CREDENTIAL_ROTATED
+  TICKET_REVOKED
+}
+
+enum NotificationOutboxStatus {
+  PENDING
+  PROCESSED
+  DEAD_LETTER
+}
+
+enum NotificationProviderName {
+  LOCAL_FILE
+  EXTERNAL
+}
+
+enum NotificationDeliveryStatus {
+  SUCCEEDED
+  RETRYABLE_FAILURE
+  PERMANENT_FAILURE
+  TIMEOUT
+}
+
 model User {
   id            String       @id @default(cuid())
   name          String
@@ -181,11 +246,17 @@ model User {
   accounts                 Account[]
   sessions                 Session[]
   memberships              Membership[]
-  venueAccessGrantsGranted VenueAccessGrant[] @relation("VenueAccessGrantedBy")
-  venueAccessGrantsRevoked VenueAccessGrant[] @relation("VenueAccessRevokedBy")
+  venueAccessGrantsGranted VenueAccessGrant[]      @relation("VenueAccessGrantedBy")
+  venueAccessGrantsRevoked VenueAccessGrant[]      @relation("VenueAccessRevokedBy")
   seatHolds                SeatHold[]
   checkoutOrders           CheckoutOrder[]
   bookings                 Booking[]
+  tickets                  Ticket[]                @relation("TicketOwner")
+  ticketsRevoked           Ticket[]                @relation("TicketRevokedBy")
+  ticketRedemptions        TicketRedemptionEvent[] @relation("TicketRedemptionScanner")
+  ticketDownloadGrants     TicketDownloadGrant[]
+  ticketAuditEvents        TicketAuditEvent[]      @relation("TicketAuditActor")
+  notificationOutbox       NotificationOutbox[]    @relation("NotificationRecipient")
 }
 
 model Account {
@@ -247,11 +318,13 @@ model Organization {
 
   memberships                Membership[]
   venues                     Venue[]
-  events                     Event[]            @relation("OrganizerEvents")
-  organizerVenueAccessGrants VenueAccessGrant[] @relation("OrganizerVenueAccess")
-  operatorVenueAccessGrants  VenueAccessGrant[] @relation("OperatorVenueAccess")
+  events                     Event[]                 @relation("OrganizerEvents")
+  organizerVenueAccessGrants VenueAccessGrant[]      @relation("OrganizerVenueAccess")
+  operatorVenueAccessGrants  VenueAccessGrant[]      @relation("OperatorVenueAccess")
   checkoutOrders             CheckoutOrder[]
   bookings                   Booking[]
+  tickets                    Ticket[]
+  ticketRedemptions          TicketRedemptionEvent[]
 
   @@index([kind])
 }
@@ -442,10 +515,12 @@ model Event {
   cancelledAt             DateTime?     @db.Timestamptz(3)
   archivedAt              DateTime?     @db.Timestamptz(3)
 
-  organizerOrganization Organization    @relation("OrganizerEvents", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
+  organizerOrganization Organization            @relation("OrganizerEvents", fields: [organizerOrganizationId], references: [id], onDelete: Restrict)
   sessions              EventSession[]
   checkoutOrders        CheckoutOrder[]
   bookings              Booking[]
+  tickets               Ticket[]
+  ticketRedemptions     TicketRedemptionEvent[]
 
   @@unique([organizerOrganizationId, slug])
   @@index([organizerOrganizationId, status])
@@ -470,18 +545,20 @@ model EventSession {
   publishedAt  DateTime?          @db.Timestamptz(3)
   cancelledAt  DateTime?          @db.Timestamptz(3)
 
-  event           Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  venue           Venue                   @relation(fields: [venueId], references: [id], onDelete: Restrict)
-  space           Space                   @relation(fields: [spaceId], references: [id], onDelete: Restrict)
-  seatMap         SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
-  priceTiers      SessionPriceTier[]
-  sectionPricing  SessionSectionPricing[]
-  seatInventory   SessionSeatInventory[]
-  seatHolds       SeatHold[]
-  inventoryEvents InventoryEventOutbox[]
-  checkoutOrders  CheckoutOrder[]
-  bookings        Booking[]
-  bookingSeats    BookingSeat[]
+  event             Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  venue             Venue                   @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  space             Space                   @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  seatMap           SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
+  priceTiers        SessionPriceTier[]
+  sectionPricing    SessionSectionPricing[]
+  seatInventory     SessionSeatInventory[]
+  seatHolds         SeatHold[]
+  inventoryEvents   InventoryEventOutbox[]
+  checkoutOrders    CheckoutOrder[]
+  bookings          Booking[]
+  bookingSeats      BookingSeat[]
+  tickets           Ticket[]
+  ticketRedemptions TicketRedemptionEvent[]
 
   @@index([eventId, status])
   @@index([eventId, startAt])
@@ -753,12 +830,16 @@ model Booking {
   confirmedAt     DateTime      @db.Timestamptz(3)
   createdAt       DateTime      @default(now()) @db.Timestamptz(3)
 
-  order        CheckoutOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  event        Event         @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  session      EventSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  seats        BookingSeat[]
+  order           CheckoutOrder          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event           Event                  @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session         EventSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seats           BookingSeat[]
+  tickets         Ticket[]
+  issuanceRequest TicketIssuanceRequest?
+  downloadGrants  TicketDownloadGrant[]
+  notifications   NotificationOutbox[]
 
   @@index([userId, confirmedAt])
   @@index([organizationId, confirmedAt])
@@ -790,6 +871,7 @@ model BookingSeat {
   seat      Seat                 @relation(fields: [seatId], references: [id], onDelete: Restrict)
   section   SeatSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
   priceTier SessionPriceTier     @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+  ticket    Ticket?
 
   @@unique([bookingId, inventoryId])
   @@unique([sessionId, seatId])
@@ -798,6 +880,194 @@ model BookingSeat {
   @@index([seatId])
   @@index([sectionId])
   @@index([priceTierId])
+}
+
+// One independently controlled admission ticket per confirmed booked seat.
+// Public references are random; QR credentials are never stored in plaintext.
+model Ticket {
+  id                       String       @id @default(cuid())
+  publicReference          String       @unique
+  bookingId                String
+  bookingSeatId            String       @unique
+  userId                   String
+  organizationId           String
+  eventId                  String
+  sessionId                String
+  status                   TicketStatus @default(ACTIVE)
+  issuedAt                 DateTime     @db.Timestamptz(3)
+  revokedAt                DateTime?    @db.Timestamptz(3)
+  revocationReason         String?
+  revokedByUserId          String?
+  lastCredentialRotationAt DateTime?    @db.Timestamptz(3)
+  createdAt                DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime     @updatedAt @db.Timestamptz(3)
+
+  booking          Booking                 @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  bookingSeat      BookingSeat             @relation(fields: [bookingSeatId], references: [id], onDelete: Restrict)
+  user             User                    @relation("TicketOwner", fields: [userId], references: [id], onDelete: Restrict)
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event            Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session          EventSession            @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  revokedByUser    User?                   @relation("TicketRevokedBy", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+  credentials      TicketCredential[]
+  redemptionEvents TicketRedemptionEvent[]
+  auditEvents      TicketAuditEvent[]
+  notifications    NotificationOutbox[]
+
+  @@index([bookingId])
+  @@index([userId, issuedAt])
+  @@index([organizationId, status])
+  @@index([eventId, status])
+  @@index([sessionId, status])
+}
+
+model TicketCredential {
+  id                      String                 @id @default(cuid())
+  ticketId                String
+  version                 Int
+  credentialHash          String                 @unique @db.Char(64)
+  hashAlgorithm           String                 @default("HMAC-SHA256-V1")
+  status                  TicketCredentialStatus @default(ACTIVE)
+  issuedAt                DateTime               @db.Timestamptz(3)
+  revokedAt               DateTime?              @db.Timestamptz(3)
+  replacedAt              DateTime?              @db.Timestamptz(3)
+  usedAt                  DateTime?              @db.Timestamptz(3)
+  replacementCredentialId String?                @unique
+  createdAt               DateTime               @default(now()) @db.Timestamptz(3)
+
+  ticket                Ticket                  @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  replacementCredential TicketCredential?       @relation("CredentialReplacement", fields: [replacementCredentialId], references: [id], onDelete: Restrict)
+  replaces              TicketCredential?       @relation("CredentialReplacement")
+  redemptionEvents      TicketRedemptionEvent[]
+
+  @@unique([ticketId, version])
+  @@index([ticketId, status])
+}
+
+model TicketRedemptionEvent {
+  id                 String                  @id @default(uuid())
+  ticketId           String?
+  ticketCredentialId String?
+  organizationId     String
+  eventId            String
+  sessionId          String
+  scannerUserId      String
+  outcome            TicketRedemptionOutcome
+  scannedAt          DateTime                @db.Timestamptz(3)
+  scannerIdentifier  String?
+  rejectionReason    String?
+  idempotencyKey     String?
+  createdAt          DateTime                @default(now()) @db.Timestamptz(3)
+
+  ticket       Ticket?           @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  credential   TicketCredential? @relation(fields: [ticketCredentialId], references: [id], onDelete: Restrict)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event        Event             @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session      EventSession      @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  scannerUser  User              @relation("TicketRedemptionScanner", fields: [scannerUserId], references: [id], onDelete: Restrict)
+
+  @@unique([scannerUserId, idempotencyKey])
+  @@index([ticketId, scannedAt])
+  @@index([sessionId, scannedAt])
+  @@index([organizationId, outcome, scannedAt])
+}
+
+model TicketDownloadGrant {
+  id        String                     @id @default(uuid())
+  bookingId String
+  userId    String
+  tokenHash String                     @unique @db.Char(64)
+  purpose   TicketDownloadGrantPurpose @default(BOOKING_PDF)
+  expiresAt DateTime                   @db.Timestamptz(3)
+  usedAt    DateTime?                  @db.Timestamptz(3)
+  revokedAt DateTime?                  @db.Timestamptz(3)
+  createdAt DateTime                   @default(now()) @db.Timestamptz(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+  @@index([bookingId, createdAt])
+}
+
+model TicketIssuanceRequest {
+  id           String                      @id @default(uuid())
+  bookingId    String                      @unique
+  status       TicketIssuanceRequestStatus @default(PENDING)
+  availableAt  DateTime                    @default(now()) @db.Timestamptz(3)
+  attemptCount Int                         @default(0)
+  processedAt  DateTime?                   @db.Timestamptz(3)
+  lastError    String?
+  deadLetterAt DateTime?                   @db.Timestamptz(3)
+  createdAt    DateTime                    @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime                    @updatedAt @db.Timestamptz(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@index([status, availableAt, createdAt])
+}
+
+model TicketAuditEvent {
+  id          String            @id @default(uuid())
+  ticketId    String
+  actorUserId String?
+  action      TicketAuditAction
+  safeReason  String?
+  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  actor  User?  @relation("TicketAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model NotificationOutbox {
+  id               String                   @id @default(uuid())
+  notificationType NotificationType
+  recipientUserId  String
+  bookingId        String?
+  ticketId         String?
+  templateVersion  Int                      @default(1)
+  locale           String                   @default("en")
+  payload          Json
+  deduplicationKey String                   @unique
+  status           NotificationOutboxStatus @default(PENDING)
+  availableAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  attemptCount     Int                      @default(0)
+  processedAt      DateTime?                @db.Timestamptz(3)
+  lastError        String?
+  deadLetterAt     DateTime?                @db.Timestamptz(3)
+  createdAt        DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                 @updatedAt @db.Timestamptz(3)
+
+  recipient        User                          @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  booking          Booking?                      @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  ticket           Ticket?                       @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  deliveryAttempts NotificationDeliveryAttempt[]
+
+  @@index([status, availableAt, createdAt])
+  @@index([recipientUserId, createdAt])
+  @@index([bookingId])
+  @@index([ticketId])
+}
+
+model NotificationDeliveryAttempt {
+  id                   String                     @id @default(uuid())
+  notificationOutboxId String
+  provider             NotificationProviderName
+  providerMessageId    String?
+  status               NotificationDeliveryStatus
+  attemptNumber        Int
+  startedAt            DateTime                   @db.Timestamptz(3)
+  completedAt          DateTime?                  @db.Timestamptz(3)
+  safeErrorCode        String?
+  createdAt            DateTime                   @default(now()) @db.Timestamptz(3)
+
+  notificationOutbox NotificationOutbox @relation(fields: [notificationOutboxId], references: [id], onDelete: Restrict)
+
+  @@unique([notificationOutboxId, attemptNumber])
+  @@index([provider, status, startedAt])
 }
 
 // Transactional inventory invalidations. These rows are committed in the same

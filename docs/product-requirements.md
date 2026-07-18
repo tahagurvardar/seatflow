@@ -2,9 +2,9 @@
 
 ## Purpose and identity
 
-SeatFlow supports the journey from event discovery to a future verified digital ticket. Every authenticated user is a customer. Platform roles are `USER` and explicitly bootstrapped `ADMIN`; tenant capability comes independently from `OWNER`, `ADMIN`, or `MEMBER` memberships in `ORGANIZER` or `VENUE_OPERATOR` organizations.
+SeatFlow supports the journey from event discovery through verified digital entry. Every authenticated user is a customer. Platform roles are `USER` and explicitly bootstrapped `ADMIN`; tenant capability comes independently from `OWNER`, `ADMIN`, or `MEMBER` memberships in `ORGANIZER` or `VENUE_OPERATOR` organizations.
 
-## Phase 3 through Phase 5A delivered scope
+## Phase 3 through Phase 5B delivered scope
 
 - Organizer-owned persistent events in concert, cinema, theatre, sport, and other categories
 - One or more concrete sessions stored as UTC instants and rendered in venue-local time
@@ -33,6 +33,12 @@ SeatFlow supports the journey from event discovery to a future verified digital 
 - Exact-once booking creation, permanent booked inventory, converted hold history, and atomic booking invalidations
 - Customer checkout/booking views and aggregate-only organizer booking summaries
 - Operational queues for stale checkouts, verified webhook reprocessing, reconciliation, and paid-but-unfulfilled review
+- Durable issuance requests created with confirmed bookings, with exact one ticket per booked seat and retry-safe recovery
+- Opaque versioned QR credentials derived from a dedicated secret while only keyed hashes are persisted
+- Customer-owned ticket list/detail, protected QR retrieval, and short-lived single-use booking PDF grants
+- Organizer/authorized venue entry validation with session binding, database time, rate limits, idempotency, and atomic first use
+- Credential rotation, terminal revocation, immutable audit/redemption history, and stale-credential rejection
+- Transactional notification outbox, deterministic local capture, bounded retries, delivery attempts, and dead letters
 
 OWNER and ADMIN members manage their authorized tenant resources. MEMBER users can inspect them but are read-only. All mutations re-authorize the current user and validate route context, nested ancestry, and lifecycle on the server.
 
@@ -54,6 +60,10 @@ Seat selection is allowed only for a published event and an `ON_SALE` session, a
 - Checkout begins `PENDING`, advances to `PAYMENT_PENDING`, and can finish as `FULFILLED`, `PAYMENT_FAILED`, `EXPIRED`, or a protected paid/review state. A success redirect is never a lifecycle transition.
 - A cryptographically verified success webhook creates exactly one `CONFIRMED` booking, copies exactly the ordered seats, changes inventory to permanent `BOOKED`, and converts the corresponding hold in one PostgreSQL transaction.
 - A verified success that cannot be safely fulfilled records paid-but-unfulfilled/review state for operators and never invents a booking or releases the seats as though payment had failed.
+- Booking fulfillment enqueues a durable issuance request in the booking transaction. Ticket issuance failure cannot undo a confirmed booking and is retried independently.
+- Every booked seat receives at most one ticket. A ticket begins `ACTIVE` and may terminate as `USED` after the first accepted scan or `REVOKED`; neither terminal state can be revived.
+- A credential begins `ACTIVE` and may terminate as `USED`, `REVOKED`, or `REPLACED`. Rotation creates a newer active version and preserves the linked predecessor.
+- A download grant is owner-bound, short-lived, single-use, and stores only a keyed token hash. PDF generation must succeed before consumption commits.
 - Cancelling a session releases all of its active holds before the cancellation transaction commits and rejects new acquisition.
 - An event can archive from draft, published, or cancelled state, but only an archived draft or published event can restore.
 - Only a securely authorized event with no sessions can be hard-deleted while still draft.
@@ -71,9 +81,17 @@ The browser may start checkout and follow a provider/test flow, but cannot asser
 
 Redis and Socket.IO remain invalidation transport only. Redis unavailability may delay outbox delivery but cannot roll back or duplicate PostgreSQL payment fulfillment.
 
+## Ticket and delivery authority
+
+Only a stored `CONFIRMED` booking and its immutable booked-seat ancestry can create tickets. Ticket plaintext is deterministically re-derived only inside protected QR/PDF rendering; PostgreSQL stores a keyed hash, version, lifecycle, and audit history. Possession of a public ticket reference is never authorization.
+
+Entry validation is online and PostgreSQL-authoritative. The scanner must be authorized for the target session before credential lookup. The server locks the credential and ticket, verifies the exact session and entry window using database time, writes one append-only redemption outcome, and atomically changes the first valid ticket/credential to `USED`. Offline acceptance is not supported or implied.
+
+Notification delivery is downstream of issuance. Provider timeout or permanent failure cannot invalidate tickets. Email contains event/session/seat context and a short-lived authenticated download link, never a reusable QR credential. A local file provider exists only for deterministic development/test capture; production requires a reviewed external adapter.
+
 ## Explicit Phase 5B exclusions
 
-There is no ticket, QR code, scan credential, refund execution, chargeback/dispute workflow, coupon, email delivery, waitlist, dynamic pricing, per-seat override, tax/fee engine, split tender, raw-card collection, sales analytics, or external-provider adapter without reviewed credentials. A confirmed booking is not presented as a ticket.
+There is no refund execution, chargeback/dispute workflow, coupon, waitlist, dynamic pricing, per-seat override, tax/fee engine, split tender, raw-card collection, sales analytics, or checked-in production external payment/notification adapter. Session cancellation preserves ticket and booking history; it does not silently refund or release booked inventory.
 
 ## Product quality requirements
 
