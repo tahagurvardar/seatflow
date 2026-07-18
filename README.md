@@ -1,6 +1,6 @@
 # SeatFlow
 
-SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 4A: PostgreSQL-authoritative session inventory and temporary seat holds**, built on the Phase 0 discovery, Phase 1 identity, Phase 2 venue/seat-map, and Phase 3 event/session/pricing foundations.
+SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 4B: transactional inventory events, automated expiration, Redis transport, and real-time invalidation**, built without weakening the PostgreSQL-authoritative Phase 4A inventory and hold engine.
 
 Every authenticated user remains a customer. Platform privilege is deliberately narrow (`USER` or `ADMIN`); organizer and venue-operator capability comes from organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
 
@@ -23,12 +23,19 @@ Every authenticated user remains a customer. Platform privilege is deliberately 
 - Atomic all-or-nothing temporary holds with a ten-minute default TTL and eight-seat default maximum
 - PostgreSQL row locking, conditional claims, bounded deadlock/serialization retries, and idempotent acquisition
 - Manual release, lazy expired-seat reclamation, a bounded expiry sweeper, and release on session cancellation
+- Transactional, identity-free inventory-event outbox records committed with every inventory mutation
+- Concurrent `SKIP LOCKED` outbox dispatch with bounded retry, backoff, deduplication, and dead-letter state
+- Redis Streams delivery used only as an invalidation transport, never as seat authority
+- BullMQ repeat scheduling that invokes the existing PostgreSQL expiry sweeper in bounded batches
+- Signed session-room Socket.IO subscriptions, reconnect refresh, duplicate/stale tolerance, and fallback polling
+- Customer selection reconciliation plus aggregate-only organizer inventory refresh
+- Protected operational health for Redis, outbox, dispatcher, expiry lag, conflicts, retries, and realtime clients
 - Coordinate-based customer seat selection, owner-safe hold details/countdowns, dashboard summaries, and aggregate organizer inventory counts
 - Database-backed public catalogue, featured content, and true event-detail 404 behavior with no mock fallback
 - Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
 - Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Phase 4A does **not** implement Redis, BullMQ, scheduled workers, WebSockets, live seat synchronization, bookings, orders, checkout, payments, tickets, QR codes, refunds, coupons, dynamic pricing, waitlists, email, or sales analytics. The request-time database view is authoritative; customers refresh to see newer availability.
+Phase 4B still does **not** implement bookings, orders, checkout, payments, payment webhooks, tickets, QR codes, refunds, coupons, dynamic pricing, waitlists, email, or sales analytics. A real-time message never changes availability locally: it tells the browser to reload the authoritative PostgreSQL snapshot, and hold creation rechecks PostgreSQL again.
 
 ## Main routes
 
@@ -53,10 +60,13 @@ Phase 4A does **not** implement Redis, BullMQ, scheduled workers, WebSockets, li
 | `.../spaces/[spaceSlug]/seat-maps/[version]` | Draft editor or immutable map preview |
 | `/admin` | Platform `ADMIN` only |
 | `/api/auth/[...all]` | Better Auth handler |
+| `/api/inventory/sessions/[sessionId]` | No-store authoritative customer snapshot plus a short-lived signed room ticket |
+| `/api/inventory/sessions/[sessionId]/organizer` | Membership-protected aggregate inventory snapshot |
+| `/api/operations/inventory/health` | Platform-admin-only non-sensitive Phase 4B health and metrics |
 
 ## Local setup
 
-Requirements: Node.js 22.12 or newer, npm, and PostgreSQL. Create separate development and test databases; the integration command resets its target.
+Requirements: Node.js 22.12 or newer, npm, PostgreSQL, and a Redis 7+ compatible endpoint. Create separate development and test databases; integration commands reset only the test target.
 
 ```sql
 CREATE DATABASE seatflow;
@@ -84,16 +94,24 @@ npm run db:test:migrate
 npm run db:test:reset
 npm run holds:backfill
 npm run holds:sweep
+npm run inventory:dispatch
+npm run inventory:dispatcher
+npm run holds:schedule
+npm run holds:worker
+npm run realtime:gateway
 npm run lint
 npm run typecheck
 npm test
 npm run test:integration
+npm run test:redis
 npm run build
 ```
 
 `npm run test:integration` validates `TEST_DATABASE_URL`, refuses a shared or ambiguously named database, resets only that target, applies all committed migrations, and runs the serial PostgreSQL suite.
 
 `npm run holds:backfill` additively materializes inventory for eligible sessions published before Phase 4A. It never resets data or invents pricing and refuses partial inconsistent inventory. `npm run holds:sweep -- --batch-size 100 --max-batches 10` expires overdue active holds in bounded, concurrency-safe batches. See the Phase 4A operations guide before running either command outside local development.
+
+`npm run inventory:dispatch` processes one bounded outbox batch; `npm run inventory:dispatcher` runs continuously. `npm run holds:schedule` idempotently registers the BullMQ repeat schedule, `npm run holds:worker` consumes it, and `npm run realtime:gateway` serves signed session rooms. The manual expiry command remains supported. See the [Phase 4B operations guide](docs/phase-4b-operations.md) for rollout, health, Redis outage, and production process requirements.
 
 ## Administrator bootstrap
 
@@ -118,4 +136,4 @@ tests/integration/            Dedicated PostgreSQL integration tests
 docs/                         Product, architecture, security, operations, roadmap
 ```
 
-See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).

@@ -109,6 +109,14 @@ enum SeatHoldStatus {
   EXPIRED
 }
 
+enum InventoryEventType {
+  INVENTORY_MATERIALIZED
+  HOLD_CREATED
+  HOLD_RELEASED
+  HOLD_EXPIRED
+  SESSION_CANCELLED
+}
+
 model User {
   id            String       @id @default(cuid())
   name          String
@@ -401,14 +409,15 @@ model EventSession {
   publishedAt  DateTime?          @db.Timestamptz(3)
   cancelledAt  DateTime?          @db.Timestamptz(3)
 
-  event          Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  venue          Venue                   @relation(fields: [venueId], references: [id], onDelete: Restrict)
-  space          Space                   @relation(fields: [spaceId], references: [id], onDelete: Restrict)
-  seatMap        SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
-  priceTiers     SessionPriceTier[]
-  sectionPricing SessionSectionPricing[]
-  seatInventory  SessionSeatInventory[]
-  seatHolds      SeatHold[]
+  event           Event                   @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  venue           Venue                   @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  space           Space                   @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  seatMap         SeatMap                 @relation(fields: [seatMapId], references: [id], onDelete: Restrict)
+  priceTiers      SessionPriceTier[]
+  sectionPricing  SessionSectionPricing[]
+  seatInventory   SessionSeatInventory[]
+  seatHolds       SeatHold[]
+  inventoryEvents InventoryEventOutbox[]
 
   @@index([eventId, status])
   @@index([eventId, startAt])
@@ -531,4 +540,43 @@ model SeatHoldItem {
 
   @@unique([holdId, inventoryId])
   @@index([inventoryId])
+}
+
+// Transactional inventory invalidations. These rows are committed in the same
+// PostgreSQL transaction as the authoritative inventory mutation. Redis is only
+// a delivery transport; this outbox is the durable hand-off boundary.
+model InventoryEventOutbox {
+  id               String             @id @default(uuid())
+  eventType        InventoryEventType
+  sessionId        String
+  aggregateId      String?
+  payload          Json
+  deduplicationKey String             @unique
+  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
+  availableAt      DateTime           @default(now()) @db.Timestamptz(3)
+  attemptCount     Int                @default(0)
+  processedAt      DateTime?          @db.Timestamptz(3)
+  lastError        String?
+  deadLetterAt     DateTime?          @db.Timestamptz(3)
+
+  session EventSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@index([processedAt, deadLetterAt, availableAt, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([aggregateId])
+}
+
+// Small, non-sensitive operational counters shared by the web process and
+// workers. Failures to write metrics never participate in inventory decisions.
+model InventoryOperationsMetric {
+  id                        String    @id
+  holdConflictCount         BigInt    @default(0)
+  transactionRetryCount     BigInt    @default(0)
+  dispatcherFailureCount    BigInt    @default(0)
+  lastDispatcherDurationMs  Int?
+  lastDispatcherAt          DateTime? @db.Timestamptz(3)
+  lastExpirySweepDurationMs Int?
+  lastExpirySweepAt         DateTime? @db.Timestamptz(3)
+  lastExpiryLagMs           Int?
+  updatedAt                 DateTime  @updatedAt @db.Timestamptz(3)
 }

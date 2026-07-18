@@ -24,6 +24,8 @@ import {
   isUniqueConstraintError,
 } from "@/server/holds/errors";
 import { releaseExpiredHoldsForSession } from "@/server/holds/expiry-service";
+import { enqueueInventoryEvent } from "@/server/inventory-events/outbox-service";
+import { recordHoldConflict } from "@/server/operations/inventory-metrics";
 
 export interface HoldActor {
   userId: string;
@@ -289,6 +291,14 @@ export async function acquireSeatHold(
           })),
         });
 
+        await enqueueInventoryEvent(transaction, {
+          eventType: "HOLD_CREATED",
+          sessionId,
+          aggregateId: hold.id,
+          deduplicationKey: `hold-created:${hold.id}`,
+          now,
+        });
+
         return hold.id;
       },
       { timeout: 20_000 },
@@ -301,14 +311,19 @@ export async function acquireSeatHold(
         now,
       );
       if (replayed) return replayed;
+      await recordHoldConflict(database);
       throw new HoldConflictError(
         "This idempotency key was already used for a different seat selection.",
       );
     }
     if (isUniqueConstraintError(error, "one_active_per_user_session")) {
+      await recordHoldConflict(database);
       throw new HoldConflictError(
         "You already have an active hold for this session. Release it before selecting new seats.",
       );
+    }
+    if (error instanceof HoldConflictError) {
+      await recordHoldConflict(database);
     }
     throw error;
   }
@@ -345,7 +360,7 @@ export async function releaseSeatHold(
 
   const hold = await database.seatHold.findUnique({
     where: { publicToken: parsed.data.publicToken },
-    select: { id: true, userId: true, status: true },
+    select: { id: true, sessionId: true, userId: true, status: true },
   });
   if (!hold || hold.userId !== actor.userId) {
     throw new HoldAuthorizationError();
@@ -368,6 +383,13 @@ export async function releaseSeatHold(
             holdExpiresAt: null,
             updatedAt: now,
           },
+        });
+        await enqueueInventoryEvent(transaction, {
+          eventType: "HOLD_RELEASED",
+          sessionId: hold.sessionId,
+          aggregateId: hold.id,
+          deduplicationKey: `hold-released:${hold.id}`,
+          now,
         });
       }
     });

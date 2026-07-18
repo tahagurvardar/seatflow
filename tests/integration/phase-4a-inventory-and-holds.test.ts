@@ -10,6 +10,7 @@ import {
   publishEventSession,
 } from "../../src/server/events/event-session-service";
 import {
+  cancelEvent,
   createEvent,
   publishEvent,
 } from "../../src/server/events/event-service";
@@ -33,6 +34,11 @@ import {
 import {
   backfillPublishedSessionInventory,
 } from "../../src/server/holds/inventory-service";
+import {
+  dispatchInventoryEventBatch,
+  type OutboxDispatcherConfiguration,
+} from "../../src/server/inventory-events/dispatcher-service";
+import type { InventoryEventTransport } from "../../src/server/inventory-events/redis-transport";
 import { createOrganizerOrganization } from "../../src/server/organizations/create-organizer-organization";
 import { createVenueOperatorOrganization } from "../../src/server/organizations/create-venue-operator-organization";
 import {
@@ -850,5 +856,224 @@ describe("Phase 4A database invariant enforcement", () => {
         },
       }),
     ).rejects.toThrow(/snapshot/i);
+  });
+});
+
+const dispatcherConfiguration: OutboxDispatcherConfiguration = {
+  batchSize: 100,
+  maximumAttempts: 3,
+  backoffBaseMs: 1_000,
+  backoffMaximumMs: 30_000,
+};
+
+describe("Phase 4B transactional inventory outbox", () => {
+  it("commits a safe outbox record atomically with hold creation", async () => {
+    const fixture = await createSellableFixture("Outbox Hold");
+    const customer = await createUser("Outbox Hold Customer");
+    const result = await acquireSeatHold(database, { userId: customer.id }, {
+      sessionId: fixture.session.id,
+      seatIds: [fixture.seatIds[0]],
+      idempotencyKey: key("outbox-hold"),
+    });
+    const event = await database.inventoryEventOutbox.findFirstOrThrow({
+      where: { eventType: "HOLD_CREATED", sessionId: fixture.session.id },
+    });
+    const serialized = JSON.stringify(event.payload);
+    expect(event.aggregateId).not.toBeNull();
+    expect(serialized).not.toContain(customer.id);
+    expect(serialized).not.toContain(customer.email);
+    expect(serialized).not.toContain(result.hold.publicToken);
+  });
+
+  it("rolls back the outbox when an all-or-nothing hold fails", async () => {
+    const fixture = await createSellableFixture("Outbox Rollback");
+    const winner = await createUser("Outbox Winner");
+    const loser = await createUser("Outbox Loser");
+    await acquireSeatHold(database, { userId: winner.id }, {
+      sessionId: fixture.session.id,
+      seatIds: [fixture.seatIds[0]],
+      idempotencyKey: key("outbox-winner"),
+    });
+    const before = await database.inventoryEventOutbox.count({
+      where: { eventType: "HOLD_CREATED" },
+    });
+    await expect(
+      acquireSeatHold(database, { userId: loser.id }, {
+        sessionId: fixture.session.id,
+        seatIds: [fixture.seatIds[0], fixture.seatIds[1]],
+        idempotencyKey: key("outbox-loser"),
+      }),
+    ).rejects.toBeInstanceOf(HoldConflictError);
+    expect(
+      await database.inventoryEventOutbox.count({ where: { eventType: "HOLD_CREATED" } }),
+    ).toBe(before);
+    expect(await database.seatHold.count({ where: { userId: loser.id } })).toBe(0);
+  });
+
+  it("writes manual release and sweeper expiry events in their mutation transactions", async () => {
+    const fixture = await createSellableFixture("Outbox Release Expiry");
+    const releaseCustomer = await createUser("Outbox Release Customer");
+    const expiryCustomer = await createUser("Outbox Expiry Customer");
+    const released = await acquireSeatHold(database, { userId: releaseCustomer.id }, {
+      sessionId: fixture.session.id,
+      seatIds: [fixture.seatIds[0]],
+      idempotencyKey: key("outbox-release"),
+    });
+    await releaseSeatHold(database, { userId: releaseCustomer.id }, {
+      publicToken: released.hold.publicToken,
+    });
+    expect(
+      await database.inventoryEventOutbox.count({ where: { eventType: "HOLD_RELEASED" } }),
+    ).toBe(1);
+
+    const acquiredAt = new Date(Date.now() + 1_000);
+    await acquireSeatHold(
+      database,
+      { userId: expiryCustomer.id },
+      {
+        sessionId: fixture.session.id,
+        seatIds: [fixture.seatIds[1]],
+        idempotencyKey: key("outbox-expiry"),
+      },
+      {
+        now: acquiredAt,
+        config: { ...DEFAULT_HOLD_CONFIGURATION, holdDurationMs: 1_000 },
+      },
+    );
+    await sweepExpiredHolds(database, { now: new Date(acquiredAt.getTime() + 1_001) });
+    expect(
+      await database.inventoryEventOutbox.count({ where: { eventType: "HOLD_EXPIRED" } }),
+    ).toBe(1);
+  });
+
+  it("writes lazy-expiry and session-cancellation invalidations", async () => {
+    const fixture = await createSellableFixture("Outbox Lazy Cancel");
+    const expiredCustomer = await createUser("Outbox Lazy Expired");
+    const replacementCustomer = await createUser("Outbox Lazy Replacement");
+    const acquiredAt = new Date(Date.now() + 1_000);
+    await acquireSeatHold(
+      database,
+      { userId: expiredCustomer.id },
+      {
+        sessionId: fixture.session.id,
+        seatIds: [fixture.seatIds[0]],
+        idempotencyKey: key("outbox-lazy-old"),
+      },
+      {
+        now: acquiredAt,
+        config: { ...DEFAULT_HOLD_CONFIGURATION, holdDurationMs: 1_000 },
+      },
+    );
+    await acquireSeatHold(
+      database,
+      { userId: replacementCustomer.id },
+      {
+        sessionId: fixture.session.id,
+        seatIds: [fixture.seatIds[0]],
+        idempotencyKey: key("outbox-lazy-new"),
+      },
+      { now: new Date(acquiredAt.getTime() + 1_001) },
+    );
+    expect(
+      await database.inventoryEventOutbox.count({ where: { eventType: "HOLD_EXPIRED" } }),
+    ).toBe(1);
+
+    await cancelEventSession(database, {
+      ...fixture.organizerScope,
+      sessionId: fixture.session.id,
+    });
+    expect(
+      await database.inventoryEventOutbox.count({ where: { eventType: "SESSION_CANCELLED" } }),
+    ).toBe(1);
+    expect(await database.seatHold.count({ where: { status: "ACTIVE" } })).toBe(0);
+  });
+
+  it("releases active holds and emits session invalidation when the parent event is cancelled", async () => {
+    const fixture = await createSellableFixture("Outbox Event Cancel");
+    const customer = await createUser("Outbox Event Cancel Customer");
+    await acquireSeatHold(database, { userId: customer.id }, {
+      sessionId: fixture.session.id,
+      seatIds: [fixture.seatIds[0]],
+      idempotencyKey: key("outbox-event-cancel"),
+    });
+    await cancelEvent(database, fixture.organizerScope);
+    expect(await database.seatHold.count({ where: { status: "ACTIVE" } })).toBe(0);
+    expect(await inventoryStates(fixture.session.id)).toEqual({
+      total: fixture.inventory.length,
+      available: fixture.inventory.length,
+      held: 0,
+    });
+    expect(
+      await database.inventoryEventOutbox.count({
+        where: { sessionId: fixture.session.id, eventType: "SESSION_CANCELLED" },
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("Phase 4B concurrent outbox dispatcher", () => {
+  it("partitions claims across workers without duplicate publication", async () => {
+    const fixture = await createSellableFixture("Dispatcher Claims");
+    const customer = await createUser("Dispatcher Customer");
+    const acquired = await acquireSeatHold(database, { userId: customer.id }, {
+      sessionId: fixture.session.id,
+      seatIds: [fixture.seatIds[0]],
+      idempotencyKey: key("dispatcher-hold"),
+    });
+    await releaseSeatHold(database, { userId: customer.id }, {
+      publicToken: acquired.hold.publicToken,
+    });
+
+    const published: string[] = [];
+    const transport: InventoryEventTransport = {
+      async publish(event) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        published.push(event.eventId);
+      },
+    };
+    const configuration = { ...dispatcherConfiguration, batchSize: 2 };
+    const now = new Date(Date.now() + 1_000);
+    const results = await Promise.all([
+      dispatchInventoryEventBatch(database, transport, configuration, now),
+      dispatchInventoryEventBatch(database, transport, configuration, now),
+    ]);
+    expect(results.reduce((sum, result) => sum + result.processed, 0)).toBe(3);
+    expect(new Set(published).size).toBe(3);
+    expect(await database.inventoryEventOutbox.count({ where: { processedAt: null } })).toBe(0);
+  });
+
+  it("applies retry backoff and dead-letters at the configured bound", async () => {
+    await createSellableFixture("Dispatcher Retry");
+    const transport: InventoryEventTransport = {
+      async publish() {
+        throw new Error("Redis delivery unavailable");
+      },
+    };
+    const configuration = {
+      ...dispatcherConfiguration,
+      batchSize: 1,
+      maximumAttempts: 2,
+      backoffBaseMs: 100,
+      backoffMaximumMs: 100,
+    };
+    const firstNow = new Date(Date.now() + 1_000);
+    const first = await dispatchInventoryEventBatch(
+      database,
+      transport,
+      configuration,
+      firstNow,
+    );
+    expect(first).toMatchObject({ failed: 1, deadLettered: 0 });
+    const second = await dispatchInventoryEventBatch(
+      database,
+      transport,
+      configuration,
+      new Date(firstNow.getTime() + 101),
+    );
+    expect(second).toMatchObject({ failed: 1, deadLettered: 1 });
+    const row = await database.inventoryEventOutbox.findFirstOrThrow();
+    expect(row).toMatchObject({ attemptCount: 2, processedAt: null });
+    expect(row.deadLetterAt).not.toBeNull();
+    expect(row.lastError).toMatch(/Redis delivery unavailable/);
   });
 });

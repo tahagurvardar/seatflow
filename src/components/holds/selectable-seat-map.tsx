@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 
 import type { HoldActionState } from "@/app/customer/hold-actions";
 import { SeatMapCoordinateCanvas } from "@/components/seat-maps/seat-map-coordinate-canvas";
@@ -11,6 +11,7 @@ import type {
   SelectionSectionView,
 } from "@/features/holds/inventory";
 import { formatMinorCurrency } from "@/features/events/money";
+import { reconcileSelectedSeatIds } from "@/features/inventory-events/delivery";
 import { cn } from "@/lib/utils";
 
 interface SelectableSeatMapProps {
@@ -18,6 +19,7 @@ interface SelectableSeatMapProps {
   maxSeats: number;
   currency: SupportedCurrency | null;
   action: (state: HoldActionState, formData: FormData) => Promise<HoldActionState>;
+  onConflictRefresh?: () => void;
 }
 
 function seatClasses(state: SelectionSeatView["state"], selected: boolean) {
@@ -33,8 +35,11 @@ export function SelectableSeatMap({
   maxSeats,
   currency,
   action,
+  onConflictRefresh,
 }: SelectableSeatMapProps) {
   const [selected, setSelected] = useState<string[]>([]);
+  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [previousSections, setPreviousSections] = useState(sections);
   const [state, formAction, pending] = useActionState<HoldActionState, FormData>(
     action,
     {},
@@ -62,7 +67,24 @@ export function SelectableSeatMap({
   const availableSeatCount = [...seatById.values()].filter(
     (seat) => seat.state === "AVAILABLE",
   ).length;
+  if (previousSections !== sections) {
+    const reconciliation = reconcileSelectedSeatIds(selected, sections);
+    setPreviousSections(sections);
+    if (reconciliation.removed.length > 0) {
+      setSelected(reconciliation.kept);
+      setSelectionNotice(
+        `${reconciliation.removed.length} selected ${reconciliation.removed.length === 1 ? "seat is" : "seats are"} no longer available and ${reconciliation.removed.length === 1 ? "was" : "were"} removed. Your remaining selection is unchanged.`,
+      );
+    }
+  }
+
   const atLimit = selected.length >= maxSeats;
+
+  useEffect(() => {
+    if (state.message && /no longer available|availability may have changed/i.test(state.message)) {
+      onConflictRefresh?.();
+    }
+  }, [onConflictRefresh, state.message]);
 
   if (seatById.size === 0) {
     return (
@@ -88,6 +110,11 @@ export function SelectableSeatMap({
 
   return (
     <form action={formAction} className="space-y-6">
+      {selectionNotice ? (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" role="alert">
+          {selectionNotice}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-4 text-xs font-semibold text-slate-600" aria-label="Seat legend">
         <span className="flex items-center gap-1.5"><span className="size-3 rounded border border-emerald-300 bg-emerald-100" /> Available</span>
         <span className="flex items-center gap-1.5"><span className="size-3 rounded border border-orange-500 bg-orange-500" /> Selected</span>

@@ -9,6 +9,13 @@ const postgresUrlSchema = z
     "must use the postgresql:// or postgres:// protocol",
   );
 
+const redisUrlSchema = z
+  .url("must be a valid URL")
+  .refine(
+    (value) => value.startsWith("redis://") || value.startsWith("rediss://"),
+    "must use the redis:// or rediss:// protocol",
+  );
+
 const applicationEnvironmentSchema = z.object({
   DATABASE_URL: postgresUrlSchema,
   DIRECT_URL: postgresUrlSchema.optional(),
@@ -22,8 +29,73 @@ const testDatabaseEnvironmentSchema = z.object({
   DIRECT_URL: postgresUrlSchema.optional(),
 });
 
+const inventoryEventEnvironmentSchema = z.object({
+  REDIS_URL: redisUrlSchema,
+  REDIS_STREAM_PREFIX: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9:_-]+$/i, "contains unsupported characters")
+    .default("seatflow:development"),
+  REDIS_WORKER_ID: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9._:-]+$/i, "contains unsupported characters")
+    .default("seatflow-worker"),
+  OUTBOX_DISPATCH_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+  OUTBOX_DISPATCH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(25).default(8),
+  OUTBOX_DISPATCH_BACKOFF_BASE_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(60_000)
+    .default(1_000),
+  OUTBOX_DISPATCH_BACKOFF_MAX_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(300_000),
+  REDIS_STREAM_MAX_LENGTH: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(1_000_000)
+    .default(100_000),
+  REDIS_EVENT_DEDUP_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(3_600)
+    .max(2_592_000)
+    .default(604_800),
+  HOLD_EXPIRY_QUEUE_NAME: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9:_-]+$/i, "contains unsupported characters")
+    .default("seatflow-hold-expiry"),
+  HOLD_EXPIRY_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(3_600_000)
+    .default(30_000),
+  HOLD_EXPIRY_JOB_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  REALTIME_GATEWAY_PORT: z.coerce.number().int().min(1_024).max(65_535).default(3_001),
+  REALTIME_MAX_CONNECTIONS_PER_IP: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(10),
+});
+
 export type ApplicationEnvironment = z.infer<
   typeof applicationEnvironmentSchema
+>;
+export type InventoryEventEnvironment = z.infer<
+  typeof inventoryEventEnvironmentSchema
 >;
 
 function formatEnvironmentError(scope: string, error: z.ZodError) {
@@ -107,4 +179,21 @@ export function readSafeTestDatabaseUrl(
   }
 
   return result.data.TEST_DATABASE_URL;
+}
+
+export function readInventoryEventEnvironment(
+  source: EnvironmentSource = process.env,
+): InventoryEventEnvironment {
+  const result = inventoryEventEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow Redis/worker", result.error);
+  }
+  return result.data;
+}
+
+export function readOptionalInventoryEventEnvironment(
+  source: EnvironmentSource = process.env,
+): InventoryEventEnvironment | null {
+  if (!source.REDIS_URL) return null;
+  return readInventoryEventEnvironment(source);
 }

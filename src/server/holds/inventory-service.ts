@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
+
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { calculatePricingCoverage } from "@/features/events/pricing";
 import { computeSessionInventoryRows } from "@/features/holds/inventory";
 import { runInTransaction } from "@/server/database/run-in-transaction";
 import { InventoryError } from "@/server/holds/errors";
+import { enqueueInventoryEvent } from "@/server/inventory-events/outbox-service";
 
 const materializationInclude = {
   seatMap: {
@@ -67,6 +70,14 @@ export async function materializeSessionInventory(
   const total = await transaction.sessionSeatInventory.count({
     where: { sessionId },
   });
+
+  if (created.count > 0) {
+    await enqueueInventoryEvent(transaction, {
+      eventType: "INVENTORY_MATERIALIZED",
+      sessionId,
+      deduplicationKey: `inventory-materialized:${sessionId}:${randomUUID()}`,
+    });
+  }
 
   return {
     sessionId,
