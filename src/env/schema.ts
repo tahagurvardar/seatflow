@@ -172,6 +172,101 @@ const notificationEnvironmentSchema = z
     }
   });
 
+/**
+ * `z.coerce.boolean` treats the string "false" as true, which is exactly the
+ * wrong default for a safety flag, so environment booleans are explicit.
+ */
+const booleanFlagSchema = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true");
+
+const operationsEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+    // Observability
+    SEATFLOW_SERVICE_NAME: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9-]+$/, "must be lowercase alphanumeric with dashes")
+      .default("seatflow-web"),
+    LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+
+    // Trusted proxy. `none` is the safe default: forwarding headers are ignored
+    // entirely unless the deployment declares who is allowed to set them.
+    TRUSTED_PROXY_MODE: z
+      .enum(["none", "trusted-hop", "platform-header"])
+      .default("none"),
+    TRUSTED_PROXY_HOP_COUNT: z.coerce.number().int().min(1).max(10).default(1),
+    TRUSTED_PROXY_HEADER: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9-]+$/, "must be a lowercase header name")
+      .optional(),
+
+    // Abuse controls
+    RATE_LIMIT_ENABLED: booleanFlagSchema.default(true),
+
+    // Worker health
+    WORKER_HEARTBEAT_STALE_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(30)
+      .max(3_600)
+      .default(180),
+
+    // Readiness and deployment gates
+    READINESS_MAX_OUTBOX_BACKLOG: z.coerce.number().int().min(0).max(1_000_000).default(500),
+    READINESS_MAX_OUTBOX_AGE_SECONDS: z.coerce.number().int().min(0).max(86_400).default(300),
+    DEPLOY_MAX_DEAD_LETTERS: z.coerce.number().int().min(0).max(1_000_000).default(0),
+    DEPLOY_MAX_PAID_UNFULFILLED: z.coerce.number().int().min(0).max(1_000_000).default(0),
+
+    // Security headers
+    SECURITY_HEADERS_ENABLED: booleanFlagSchema.default(true),
+    SECURITY_HSTS_MAX_AGE_SECONDS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(63_072_000)
+      .default(31_536_000),
+  })
+  .superRefine((environment, context) => {
+    if (
+      environment.TRUSTED_PROXY_MODE === "platform-header" &&
+      !environment.TRUSTED_PROXY_HEADER
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["TRUSTED_PROXY_HEADER"],
+        message: "is required when TRUSTED_PROXY_MODE is platform-header",
+      });
+    }
+    if (
+      environment.TRUSTED_PROXY_MODE !== "platform-header" &&
+      environment.TRUSTED_PROXY_HEADER
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["TRUSTED_PROXY_HEADER"],
+        message: "must not be set unless TRUSTED_PROXY_MODE is platform-header",
+      });
+    }
+  });
+
+export type OperationsEnvironment = z.infer<typeof operationsEnvironmentSchema>;
+
+export function readOperationsEnvironment(
+  source: EnvironmentSource = process.env,
+): OperationsEnvironment {
+  const result = operationsEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow operations", result.error);
+  }
+  return result.data;
+}
+
 export type ApplicationEnvironment = z.infer<
   typeof applicationEnvironmentSchema
 >;

@@ -9,6 +9,7 @@ import {
   clientAddressFromRequest,
   consumeRateLimit,
 } from "@/server/realtime/request-rate-limit";
+import { applyRateLimit } from "@/server/security/route-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,18 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ sessionId: string }> },
 ) {
+  const authSession = await getCurrentSession();
+
+  // Distributed limit across every web instance; the process-local bucket below
+  // remains as the Redis-outage fallback.
+  const limited = await applyRateLimit({
+    policyName: "inventory.snapshot",
+    request,
+    subjectId: authSession?.user.id ?? null,
+    operation: "inventory.snapshot",
+  });
+  if (limited) return limited;
+
   const rateLimit = consumeRateLimit(
     `customer-snapshot:${clientAddressFromRequest(request)}`,
     { limit: 120, windowMs: 60_000 },
@@ -45,7 +58,6 @@ export async function GET(
     return Response.json({ error: "Invalid inventory snapshot request." }, { status: 400 });
   }
 
-  const authSession = await getCurrentSession();
   const view = await getSeatSelectionView(
     getDatabase(),
     authSession ? { userId: authSession.user.id } : null,

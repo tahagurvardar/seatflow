@@ -1108,3 +1108,40 @@ model InventoryOperationsMetric {
   lastExpiryLagMs           Int?
   updatedAt                 DateTime  @updatedAt @db.Timestamptz(3)
 }
+
+enum WorkerType {
+  INVENTORY_OUTBOX_DISPATCHER
+  HOLD_EXPIRY_WORKER
+  REALTIME_GATEWAY
+  PAYMENT_RECONCILIATION
+  TICKET_ISSUANCE_DISPATCHER
+  NOTIFICATION_DISPATCHER
+}
+
+enum WorkerHealthStatus {
+  STARTING
+  HEALTHY
+  DEGRADED
+  STOPPED
+}
+
+/// Phase 5C1 worker liveness. Readiness derives staleness from lastSeenAt, so a
+/// crashed process becomes visible without any Redis dependency. Rows carry no
+/// secret, connection string, hostname, or process command line: instanceLabel
+/// is an operator-chosen non-secret identifier such as "dispatcher-1".
+model WorkerHeartbeat {
+  workerType          WorkerType
+  environment         String             @db.VarChar(32)
+  instanceLabel       String             @db.VarChar(64)
+  status              WorkerHealthStatus
+  version             String?            @db.VarChar(64)
+  startedAt           DateTime           @db.Timestamptz(3)
+  lastSeenAt          DateTime           @db.Timestamptz(3)
+  lastRunDurationMs   Int?
+  consecutiveFailures Int                @default(0)
+  createdAt           DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime           @updatedAt @db.Timestamptz(3)
+
+  @@id([workerType, environment, instanceLabel])
+  @@index([lastSeenAt])
+}

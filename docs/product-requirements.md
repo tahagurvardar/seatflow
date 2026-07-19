@@ -100,3 +100,30 @@ There is no refund execution, chargeback/dispute workflow, coupon, waitlist, dyn
 - Authorization inside every protected read and mutation, not only in navigation
 - Central runtime validation, strict TypeScript, reproducible CI, and behavior-focused PostgreSQL tests
 - Honest lifecycle and availability wording; incomplete capabilities never appear operational
+
+## Phase 5C1 operational requirements
+
+- Every request carries a correlation identifier that a customer or operator can
+  quote, and that identifier appears on safe responses.
+- An operator can determine, without database access, whether the application is
+  running (liveness), fit to serve (readiness), and what its backlogs are
+  (protected metrics).
+- A crashed or wedged worker becomes visible within
+  `WORKER_HEARTBEAT_STALE_SECONDS` without any Redis dependency.
+- Abuse controls apply across every web instance, not per process, and report
+  when they have degraded.
+- No log, metric, health response, or client error body contains a secret,
+  credential, connection string, session cookie, webhook signature, raw payload,
+  stack trace, or customer email.
+- A deployment cannot be enabled while development-only providers are selected,
+  secrets are weak or reused, origins are insecure, workers are undeclared, the
+  schema is behind the code, or dead-letter and paid-unfulfilled gates are
+  exceeded.
+- A backup can be proven restorable into a disposable database, including
+  migration compatibility and critical row counts.
+- Concurrency correctness is continuously demonstrable: one seat has one holder,
+  one webhook storm produces one booking, one credential accepts one entry.
+
+Out of scope for Phase 5C1 and unchanged: refunds, disputes, coupons, taxes,
+payouts, settlement, resale or transfer, native applications, and business
+analytics.

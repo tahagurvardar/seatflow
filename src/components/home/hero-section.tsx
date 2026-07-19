@@ -76,13 +76,13 @@ export function HeroSection({ events }: { events: readonly Event[] }) {
 
           <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-400">
             <span className="font-semibold text-slate-200">Explore:</span>
-            <Link className="transition hover:text-white" href="/events?category=concert">
+            <Link className="inline-block py-1 transition hover:text-white" href="/events?category=concert">
               Live music
             </Link>
-            <Link className="transition hover:text-white" href="/events?category=theatre">
+            <Link className="inline-block py-1 transition hover:text-white" href="/events?category=theatre">
               Theatre
             </Link>
-            <Link className="transition hover:text-white" href="/events?category=sport">
+            <Link className="inline-block py-1 transition hover:text-white" href="/events?category=sport">
               Sports
             </Link>
           </div>

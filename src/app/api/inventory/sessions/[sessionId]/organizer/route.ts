@@ -10,6 +10,7 @@ import {
   clientAddressFromRequest,
   consumeRateLimit,
 } from "@/server/realtime/request-rate-limit";
+import { applyRateLimit } from "@/server/security/route-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,21 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ sessionId: string }> },
 ) {
+  const authSession = await getCurrentSession();
+  if (!authSession) {
+    return Response.json({ error: "Authentication is required." }, { status: 401 });
+  }
+
+  // Distributed limit across every web instance; the process-local bucket below
+  // remains as the Redis-outage fallback.
+  const limited = await applyRateLimit({
+    policyName: "inventory.snapshot",
+    request,
+    subjectId: authSession.user.id,
+    operation: "inventory.snapshot",
+  });
+  if (limited) return limited;
+
   const rateLimit = consumeRateLimit(
     `organizer-snapshot:${clientAddressFromRequest(request)}`,
     { limit: 120, windowMs: 60_000 },
@@ -37,10 +53,6 @@ export async function GET(
     );
   }
 
-  const authSession = await getCurrentSession();
-  if (!authSession) {
-    return Response.json({ error: "Authentication is required." }, { status: 401 });
-  }
   const { sessionId } = await context.params;
   const url = new URL(request.url);
   const parsed = requestSchema.safeParse({

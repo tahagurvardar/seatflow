@@ -11,6 +11,8 @@ import {
 } from "../src/env/schema";
 import { parseInventoryEvent } from "../src/features/inventory-events/event";
 import { verifyRealtimeRoomTicket } from "../src/features/inventory-events/room-ticket";
+import { getDatabase } from "../src/lib/database";
+import { startWorkerHeartbeat } from "../src/server/operations/worker-heartbeat";
 import {
   createRedisConnection,
   ensureRedisConnected,
@@ -178,6 +180,14 @@ async function consumeInventoryEvents() {
   }
 }
 
+// Phase 5C1: durable gateway heartbeat. The ephemeral Redis client gauge
+// disappears during exactly the Redis outage an operator most needs to see, so
+// gateway liveness is recorded in PostgreSQL instead.
+const gatewayDatabase = getDatabase();
+const stopHeartbeat = startWorkerHeartbeat(gatewayDatabase, {
+  workerType: "REALTIME_GATEWAY",
+});
+
 const metricInterval = setInterval(() => void publishClientMetric(), 30_000);
 httpServer.listen(environment.REALTIME_GATEWAY_PORT, () => {
   console.info(
@@ -190,9 +200,11 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   clearInterval(metricInterval);
+  await stopHeartbeat();
   await io.close();
   await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   await redis.quit().catch(() => redis.disconnect());
+  await gatewayDatabase.$disconnect();
 }
 
 process.once("SIGINT", () => void shutdown());
