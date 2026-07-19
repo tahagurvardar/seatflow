@@ -179,3 +179,50 @@ docs/                         Product, architecture, security, operations, roadm
 ```
 
 See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [Phase 5A operations](docs/phase-5a-operations.md), [Phase 5B operations](docs/phase-5b-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+
+## Phase 5C1 — production readiness
+
+Phase 5C1 adds observability, abuse controls, health separation, backup
+verification, load and outage testing, and a deployment gate.
+
+**Production traffic is not enabled.** `npm run production:check` fails by
+design until Phase 5C2 delivers reviewed external payment and notification
+adapters.
+
+### Commands
+
+```bash
+npm run production:check              # read-only deployment gate
+npm run production:check -- --json
+npm run production:check -- --skip-probes
+
+npm run backup:create -- --out <directory outside the repo>
+npm run backup:verify -- --file <dump> --target <disposable url> --confirm
+
+npm run load:test -- --concurrency=8 --iterations=40
+npm run chaos:verify
+```
+
+### Endpoints
+
+| Route | Access |
+| --- | --- |
+| `GET /api/health/live` | public — process liveness, no dependency I/O |
+| `GET /api/health/ready` | public status; per-check detail for platform ADMIN |
+| `GET /api/operations/metrics` | platform ADMIN — bounded aggregate metrics |
+
+### Guides
+
+- [Production readiness](docs/phase-5c1-production-readiness.md)
+- [Observability](docs/observability.md)
+- [Deployment process matrix](docs/deployment-process-matrix.md)
+- [Incident response runbooks](docs/incident-response.md)
+- [Backup and restore](docs/backup-and-restore.md)
+- [Load and outage testing](docs/load-testing.md)
+- [Accessibility verification](docs/accessibility-verification.md)
+
+### Local infrastructure
+
+PostgreSQL and Redis run from durable local paths rather than `%TEMP%`, which a
+Windows cleanup can delete. Start them before running the database-backed
+suites; `PG_BIN_DIR` points the backup tooling at the PostgreSQL binaries.

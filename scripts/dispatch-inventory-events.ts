@@ -10,6 +10,7 @@ import {
   getOutboxDispatcherConfiguration,
 } from "../src/server/inventory-events/dispatcher-service";
 import { RedisInventoryEventTransport } from "../src/server/inventory-events/redis-transport";
+import { recordWorkerHeartbeat } from "../src/server/operations/worker-heartbeat";
 
 const continuous = process.argv.includes("--continuous");
 const intervalArgument = process.argv.find((argument) =>
@@ -38,19 +39,44 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
+// Phase 5C1: durable heartbeat so readiness can detect a crashed or wedged
+// dispatcher. Recording is best effort and never aborts a dispatch batch.
+const startedAt = new Date();
+let consecutiveFailures = 0;
+
 try {
+  await recordWorkerHeartbeat(database, {
+    workerType: "INVENTORY_OUTBOX_DISPATCHER",
+    status: "STARTING",
+    startedAt,
+  });
+
   do {
     const result = await dispatchInventoryEventBatch(
       database,
       transport,
       configuration,
     );
+    consecutiveFailures = result.failed > 0 ? consecutiveFailures + 1 : 0;
+    await recordWorkerHeartbeat(database, {
+      workerType: "INVENTORY_OUTBOX_DISPATCHER",
+      status: consecutiveFailures > 0 ? "DEGRADED" : "HEALTHY",
+      startedAt,
+      lastRunDurationMs: result.durationMs,
+      consecutiveFailures,
+    });
     console.info(
       `Inventory outbox: claimed=${result.claimed} processed=${result.processed} failed=${result.failed} deadLettered=${result.deadLettered} durationMs=${Math.round(result.durationMs)}`,
     );
     if (continuous && !stopping) await delay(intervalMs);
   } while (continuous && !stopping);
 } finally {
+  await recordWorkerHeartbeat(database, {
+    workerType: "INVENTORY_OUTBOX_DISPATCHER",
+    status: "STOPPED",
+    startedAt,
+    consecutiveFailures,
+  });
   await redis.quit().catch(() => redis.disconnect());
   await database.$disconnect();
 }

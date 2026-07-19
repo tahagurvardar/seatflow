@@ -42,6 +42,11 @@
     "tickets:manage": "tsx scripts/manage-ticket.ts",
     "notifications:dispatch": "tsx scripts/dispatch-notifications.ts",
     "notifications:retry": "tsx scripts/retry-notifications.ts",
+    "production:check": "tsx scripts/production-check.ts",
+    "backup:create": "tsx scripts/backup-database.ts",
+    "backup:verify": "tsx scripts/verify-backup.ts",
+    "load:test": "tsx scripts/load-test.ts",
+    "chaos:verify": "tsx scripts/chaos-verify.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

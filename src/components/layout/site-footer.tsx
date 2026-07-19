@@ -26,13 +26,13 @@ export function SiteFooter() {
             <ul className="mt-4 space-y-3 text-sm text-slate-400">
               {NAVIGATION.map((item) => (
                 <li key={item.label}>
-                  <Link className="transition hover:text-white" href={item.href}>
+                  <Link className="inline-block py-1 transition hover:text-white" href={item.href}>
                     {item.label}
                   </Link>
                 </li>
               ))}
               <li>
-                <Link className="transition hover:text-white" href={ROUTES.register}>
+                <Link className="inline-block py-1 transition hover:text-white" href={ROUTES.register}>
                   Create Account
                 </Link>
               </li>
@@ -44,7 +44,7 @@ export function SiteFooter() {
               {EVENT_CATEGORIES.map((category) => (
                 <li key={category.id}>
                   <Link
-                    className="transition hover:text-white"
+                    className="inline-block py-1 transition hover:text-white"
                     href={`${ROUTES.events}?category=${category.id}`}
                   >
                     {category.label}

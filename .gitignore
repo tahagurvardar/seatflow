@@ -38,6 +38,30 @@ yarn-error.log*
 !.env.example
 tmp/seatflow-mail/
 
+# Phase 5C1 operational artifacts.
+# Backups contain complete customer, payment, and ticket data; load-test and
+# chaos runs produce reports that may embed references. None of this may ever
+# reach version control, so the patterns are deliberately broad.
+*.dump
+*.sql.gz
+*.backup
+/backups/
+/tmp/backups/
+/tmp/load-test/
+/tmp/chaos/
+/tmp/reports/
+load-test-*.json
+chaos-report-*.json
+accessibility-report-*.json
+
+# Generated ticket artifacts must never be retained in the tree.
+*.pdf
+!public/**/*.pdf
+
+# Structured log capture
+*.log
+/logs/
+
 # vercel
 .vercel
 

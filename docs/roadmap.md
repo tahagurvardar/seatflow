@@ -94,3 +94,31 @@ Phase 4B deliberately leaves every allocation decision in PostgreSQL and impleme
 - End-to-end accessibility, load, resilience, backup/restore, and incident-response verification
 
 This recommended next phase is not started in the current repository.
+
+## Phase 5C1 — production hardening (complete, traffic still gated)
+
+Delivered: structured redacted logging, request/operation correlation, separated
+liveness/readiness/protected metrics, durable worker heartbeats with stale
+detection, Redis-backed distributed rate limiting with declared failure modes,
+an explicit trusted-proxy model, a production security-header policy,
+`npm run production:check`, non-destructive backup and guarded restore
+verification, a correctness-asserting load harness, controlled outage/chaos
+verification, and an honest accessibility audit.
+
+One additive migration (`20260719000000_phase_5c1_worker_heartbeats`).
+
+**Production traffic remains disabled.** `npm run production:check` fails by
+design on two gates: no reviewed external payment adapter and no reviewed
+external notification adapter exist in this build.
+
+## Phase 5C2 — external providers (next)
+
+1. External payment adapter: raw-body signature verification preserved,
+   contract tests mirroring the local signed provider, secret rotation with an
+   overlap window, and a webhook endpoint review.
+2. External notification adapter: bounded template context, provider
+   idempotency, and delivery-status mapping onto the existing outbox.
+3. Refunds and disputes: a new append-only ledger rather than mutation of
+   existing payment rows; inventory release policy decided explicitly.
+4. Re-run every Phase 5C1 gate with the adapters installed, then remove the two
+   deployment gates from `production-check.ts`.

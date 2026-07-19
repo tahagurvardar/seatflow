@@ -11,10 +11,12 @@ import {
   getNotificationDispatcherConfiguration,
 } from "../src/server/notifications/dispatcher-service";
 import { createNotificationProvider } from "../src/server/notifications/provider-registry";
+import { recordWorkerHeartbeat } from "../src/server/operations/worker-heartbeat";
 
 const application = readApplicationEnvironment();
 const notification = readNotificationEnvironment();
 const ticket = readTicketEnvironment();
+const startedAt = new Date();
 try {
   const result = await dispatchNotificationBatch(
     getDatabase(),
@@ -26,6 +28,14 @@ try {
     }),
   );
   console.info(`Notification outbox: claimed=${result.claimed} processed=${result.processed} failed=${result.failed} deadLettered=${result.deadLettered}.`);
+  // Phase 5C1: a bounded one-shot dispatcher records liveness per invocation.
+  await recordWorkerHeartbeat(getDatabase(), {
+    workerType: "NOTIFICATION_DISPATCHER",
+    status: result.failed > 0 ? "DEGRADED" : "HEALTHY",
+    startedAt,
+    lastRunDurationMs: Date.now() - startedAt.getTime(),
+    consecutiveFailures: result.failed,
+  });
 } finally {
   await disconnectDatabase();
 }
