@@ -21,9 +21,13 @@ import {
   PaymentWebhookValidationError,
 } from "@/server/payments/errors";
 import type {
+  NormalizedDisputeWebhookEvent,
   NormalizedPaymentWebhookEvent,
+  NormalizedRefundWebhookEvent,
   PaymentProvider,
 } from "@/server/payments/payment-provider";
+import { applyDisputeFromVerifiedEvent } from "@/server/disputes/dispute-service";
+import { settleRefundFromVerifiedEvent } from "@/server/refunds/settlement-service";
 import {
   attemptImmediateTicketIssuance,
   enqueueTicketIssuance,
@@ -59,7 +63,15 @@ export type WebhookProcessingResult =
   | { outcome: "BOOKED"; bookingReference: string; duplicate: boolean }
   | { outcome: "FAILED"; duplicate: boolean }
   | { outcome: "PENDING"; duplicate: boolean }
-  | { outcome: "REQUIRES_REVIEW"; safeCode: string; duplicate: boolean };
+  | { outcome: "REQUIRES_REVIEW"; safeCode: string; duplicate: boolean }
+  // Phase 5C2A categories. Refund and dispute events share this table so one
+  // unique (provider, providerEventId) gives exact-once replay protection
+  // across every financial event type the provider can deliver.
+  | { outcome: "REFUND_SETTLED"; status: string; duplicate: boolean }
+  | { outcome: "REFUND_IGNORED"; reason: string; duplicate: boolean }
+  | { outcome: "DISPUTE_RECORDED"; status: string; duplicate: boolean }
+  | { outcome: "DISPUTE_IGNORED"; reason: string; duplicate: boolean }
+  | { outcome: "UNSUPPORTED_EVENT"; duplicate: boolean };
 
 interface ProcessOptions {
   now?: Date;
@@ -284,12 +296,21 @@ export async function processVerifiedWebhookRecord(
         if (webhook.signatureStatus !== "VERIFIED") {
           throw new PaymentWebhookSignatureError();
         }
+        // Phase 5C2A shares one verified-webhook table across payment, refund,
+        // and dispute events so a single unique (provider, providerEventId)
+        // gives exact-once replay protection for all of them. This function
+        // still advances payment-intent state only; refund and dispute
+        // envelopes are routed to their own services.
+        if (webhook.eventCategory !== "PAYMENT" || webhook.normalizedStatus === null) {
+          throw new PaymentWebhookValidationError();
+        }
+        const normalizedStatus = webhook.normalizedStatus;
         if (!webhook.paymentAttemptId) {
           await markWebhookReview(transaction, {
             webhookId,
             safeCode: "UNKNOWN_PAYMENT_INTENT",
             now,
-            paid: webhook.normalizedStatus === "SUCCEEDED",
+            paid: normalizedStatus === "SUCCEEDED",
           });
           return;
         }
@@ -347,7 +368,7 @@ export async function processVerifiedWebhookRecord(
           return;
         }
 
-        if (isContradictoryTerminalStatus(attempt.status, webhook.normalizedStatus)) {
+        if (isContradictoryTerminalStatus(attempt.status, normalizedStatus)) {
           await markWebhookReview(transaction, {
             webhookId,
             attemptId: attempt.id,
@@ -361,10 +382,7 @@ export async function processVerifiedWebhookRecord(
           return;
         }
 
-        if (
-          isTerminalPaymentStatus(attempt.status) &&
-          attempt.status === webhook.normalizedStatus
-        ) {
+        if (isTerminalPaymentStatus(attempt.status) && attempt.status === normalizedStatus) {
           await transaction.paymentWebhookEvent.update({
             where: { id: webhookId },
             data: {
@@ -394,20 +412,20 @@ export async function processVerifiedWebhookRecord(
             sessionId: order.sessionId,
             safeCode: "PAYMENT_AMOUNT_OR_CURRENCY_MISMATCH",
             now,
-            paid: webhook.normalizedStatus === "SUCCEEDED",
+            paid: normalizedStatus === "SUCCEEDED",
           });
           return;
         }
 
-        if (["FAILED", "CANCELLED"].includes(webhook.normalizedStatus)) {
-          const cancelled = webhook.normalizedStatus === "CANCELLED";
+        if (normalizedStatus === "FAILED" || normalizedStatus === "CANCELLED") {
+          const cancelled = normalizedStatus === "CANCELLED";
           await transaction.paymentAttempt.update({
             where: { id: attempt.id },
             data: {
-              status: webhook.normalizedStatus,
+              status: normalizedStatus,
               failedAt: cancelled ? null : now,
               cancelledAt: cancelled ? now : null,
-              lastProviderStatus: webhook.normalizedStatus.toLowerCase(),
+              lastProviderStatus: normalizedStatus.toLowerCase(),
               safeFailureCode: cancelled ? "PAYMENT_CANCELLED" : "PAYMENT_FAILED",
               updatedAt: now,
             },
@@ -444,12 +462,12 @@ export async function processVerifiedWebhookRecord(
           return;
         }
 
-        if (webhook.normalizedStatus !== "SUCCEEDED") {
+        if (normalizedStatus !== "SUCCEEDED") {
           await transaction.paymentAttempt.update({
             where: { id: attempt.id },
             data: {
               status: "PENDING",
-              lastProviderStatus: webhook.normalizedStatus.toLowerCase(),
+              lastProviderStatus: normalizedStatus.toLowerCase(),
               updatedAt: now,
             },
           });
@@ -648,7 +666,237 @@ export async function processVerifiedWebhookRecord(
   return loadExistingResult(database, webhookId, false);
 }
 
-/** Verify the exact raw body before parsing or persisting any provider claims. */
+/**
+ * Store a verified refund or dispute envelope.
+ *
+ * Uses the same unique `(provider, providerEventId)` constraint as payment
+ * events, so a duplicate delivery of any category collapses to one row no
+ * matter which delivery wins the race.
+ */
+async function storeVerifiedFinancialWebhook(
+  database: PrismaClient,
+  provider: PaymentProvider,
+  input:
+    | { category: "REFUND"; event: NormalizedRefundWebhookEvent }
+    | { category: "DISPUTE"; event: NormalizedDisputeWebhookEvent },
+  payloadHash: string,
+  now: Date,
+) {
+  const attempt = await database.paymentAttempt.findFirst({
+    where: { provider: provider.name, providerIntentId: input.event.providerIntentId },
+    select: { id: true },
+  });
+  try {
+    const created = await database.paymentWebhookEvent.create({
+      data: {
+        provider: provider.name,
+        providerEventId: input.event.providerEventId,
+        eventType: input.event.eventType,
+        eventCategory: input.category,
+        providerIntentId: input.event.providerIntentId,
+        paymentAttemptId: attempt?.id,
+        normalizedStatus: null,
+        normalizedRefundStatus:
+          input.category === "REFUND" ? input.event.status : null,
+        normalizedDisputeStatus:
+          input.category === "DISPUTE" ? input.event.status : null,
+        providerRefundId:
+          input.category === "REFUND" ? input.event.providerRefundId : null,
+        providerDisputeId:
+          input.category === "DISPUTE" ? input.event.providerDisputeId : null,
+        amountMinor: input.event.amountMinor,
+        currency: input.event.currency,
+        signatureStatus: "VERIFIED",
+        processingStatus: "RECEIVED",
+        receivedAt: now,
+        providerOccurredAt: input.event.occurredAt,
+        payloadHash,
+      },
+      select: { id: true },
+    });
+    return { webhookId: created.id, duplicate: false };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const existing = await database.paymentWebhookEvent.findUniqueOrThrow({
+      where: {
+        provider_providerEventId: {
+          provider: provider.name,
+          providerEventId: input.event.providerEventId,
+        },
+      },
+      select: { id: true },
+    });
+    return { webhookId: existing.id, duplicate: true };
+  }
+}
+
+/**
+ * Settle one verified refund event under a row lock on the webhook record.
+ *
+ * The webhook is marked processed inside the same transaction that applied the
+ * financial change, so a failure at any point leaves it retryable rather than
+ * recorded as done.
+ */
+async function processVerifiedRefundRecord(
+  database: PrismaClient,
+  webhookId: string,
+  options: ProcessOptions,
+): Promise<WebhookProcessingResult> {
+  const now = options.now ?? new Date();
+  return runInTransaction(
+    database,
+    async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "PaymentWebhookEvent" WHERE "id" = ${webhookId} FOR UPDATE
+      `);
+      const webhook = await transaction.paymentWebhookEvent.findUniqueOrThrow({
+        where: { id: webhookId },
+      });
+      if (["PROCESSED", "REQUIRES_REVIEW"].includes(webhook.processingStatus)) {
+        return { outcome: "REFUND_IGNORED", reason: "ALREADY_PROCESSED", duplicate: true };
+      }
+      if (webhook.signatureStatus !== "VERIFIED") throw new PaymentWebhookSignatureError();
+      if (!webhook.providerRefundId || !webhook.normalizedRefundStatus) {
+        throw new PaymentWebhookValidationError();
+      }
+
+      const settlement = await settleRefundFromVerifiedEvent(transaction, {
+        webhookId,
+        providerRefundId: webhook.providerRefundId,
+        incomingStatus: webhook.normalizedRefundStatus,
+        amountMinor: webhook.amountMinor,
+        currency: webhook.currency,
+        occurredAt: webhook.providerOccurredAt,
+        now,
+      });
+
+      const requiresReview =
+        settlement.outcome === "REVIEW" || settlement.outcome === "UNKNOWN_REFUND";
+      await transaction.paymentWebhookEvent.update({
+        where: { id: webhookId },
+        data: {
+          processingStatus: requiresReview ? "REQUIRES_REVIEW" : "PROCESSED",
+          processedAt: now,
+          attemptCount: { increment: 1 },
+          safeProcessingError:
+            settlement.outcome === "REVIEW"
+              ? settlement.safeCode
+              : settlement.outcome === "UNKNOWN_REFUND"
+                ? "UNKNOWN_PROVIDER_REFUND"
+                : null,
+        },
+      });
+
+      await options.beforeCommit?.();
+
+      if (settlement.outcome === "APPLIED") {
+        return { outcome: "REFUND_SETTLED", status: settlement.status, duplicate: false };
+      }
+      if (settlement.outcome === "REVIEW") {
+        return { outcome: "REQUIRES_REVIEW", safeCode: settlement.safeCode, duplicate: false };
+      }
+      if (settlement.outcome === "UNKNOWN_REFUND") {
+        return {
+          outcome: "REQUIRES_REVIEW",
+          safeCode: "UNKNOWN_PROVIDER_REFUND",
+          duplicate: false,
+        };
+      }
+      return { outcome: "REFUND_IGNORED", reason: settlement.reason, duplicate: false };
+    },
+    { timeout: 30_000 },
+  );
+}
+
+/** Apply one verified dispute event under a row lock on the webhook record. */
+async function processVerifiedDisputeRecord(
+  database: PrismaClient,
+  webhookId: string,
+  options: ProcessOptions,
+): Promise<WebhookProcessingResult> {
+  const now = options.now ?? new Date();
+  return runInTransaction(
+    database,
+    async (transaction) => {
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "PaymentWebhookEvent" WHERE "id" = ${webhookId} FOR UPDATE
+      `);
+      const webhook = await transaction.paymentWebhookEvent.findUniqueOrThrow({
+        where: { id: webhookId },
+      });
+      if (["PROCESSED", "REQUIRES_REVIEW"].includes(webhook.processingStatus)) {
+        return { outcome: "DISPUTE_IGNORED", reason: "ALREADY_PROCESSED", duplicate: true };
+      }
+      if (webhook.signatureStatus !== "VERIFIED") throw new PaymentWebhookSignatureError();
+      if (!webhook.providerDisputeId || !webhook.normalizedDisputeStatus) {
+        throw new PaymentWebhookValidationError();
+      }
+
+      const applied = await applyDisputeFromVerifiedEvent(transaction, {
+        webhookId,
+        providerEventId: webhook.providerEventId,
+        eventType: webhook.eventType,
+        providerIntentId: webhook.providerIntentId,
+        providerDisputeId: webhook.providerDisputeId,
+        status: webhook.normalizedDisputeStatus,
+        reasonCategory: "UNRECOGNIZED",
+        amountMinor: webhook.amountMinor,
+        currency: webhook.currency,
+        occurredAt: webhook.providerOccurredAt,
+        evidenceDueAt: null,
+        now,
+      });
+
+      const requiresReview =
+        applied.outcome === "REVIEW" || applied.outcome === "UNKNOWN_PAYMENT";
+      await transaction.paymentWebhookEvent.update({
+        where: { id: webhookId },
+        data: {
+          processingStatus: requiresReview ? "REQUIRES_REVIEW" : "PROCESSED",
+          processedAt: now,
+          attemptCount: { increment: 1 },
+          safeProcessingError:
+            applied.outcome === "REVIEW"
+              ? applied.safeCode
+              : applied.outcome === "UNKNOWN_PAYMENT"
+                ? "UNKNOWN_PAYMENT_INTENT"
+                : null,
+        },
+      });
+
+      await options.beforeCommit?.();
+
+      if (applied.outcome === "OPENED") {
+        return { outcome: "DISPUTE_RECORDED", status: "OPEN", duplicate: false };
+      }
+      if (applied.outcome === "APPLIED") {
+        return { outcome: "DISPUTE_RECORDED", status: applied.status, duplicate: false };
+      }
+      if (applied.outcome === "REVIEW") {
+        return { outcome: "REQUIRES_REVIEW", safeCode: applied.safeCode, duplicate: false };
+      }
+      if (applied.outcome === "UNKNOWN_PAYMENT") {
+        return {
+          outcome: "REQUIRES_REVIEW",
+          safeCode: "UNKNOWN_PAYMENT_INTENT",
+          duplicate: false,
+        };
+      }
+      return { outcome: "DISPUTE_IGNORED", reason: applied.reason, duplicate: false };
+    },
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Verify the exact raw body, then route by event category.
+ *
+ * Order is load-bearing and unchanged from Phase 5A: bound the payload, verify
+ * the signature over the exact bytes, and only then parse or persist anything
+ * the provider claims. Nothing below the signature check trusts a provider
+ * field, and an event category this build does not model is recorded as
+ * unsupported rather than guessed at.
+ */
 export async function processPaymentWebhook(
   database: PrismaClient,
   provider: PaymentProvider,
@@ -658,30 +906,54 @@ export async function processPaymentWebhook(
   assertPaymentWebhookPayloadSize(input.rawBody, options.maximumPayloadBytes);
   if (!provider.verifyWebhook(input)) throw new PaymentWebhookSignatureError();
 
-  let event: NormalizedPaymentWebhookEvent;
+  let normalized;
   try {
-    event = provider.parseWebhookEvent(input.rawBody);
+    normalized = provider.normalizeWebhookEvent(input.rawBody);
   } catch (error) {
     if (error instanceof PaymentWebhookValidationError) throw error;
     throw new PaymentWebhookValidationError();
   }
+
   const now = options.now ?? new Date();
-  const stored = await storeVerifiedWebhook(
+  const payloadHash = hashPaymentWebhookPayload(input.rawBody);
+
+  if (normalized.category === "UNSUPPORTED") {
+    // Acknowledged so the provider stops retrying, but nothing is inferred
+    // from an event whose meaning this build does not know.
+    return { outcome: "UNSUPPORTED_EVENT", duplicate: false };
+  }
+
+  if (normalized.category === "PAYMENT") {
+    const stored = await storeVerifiedWebhook(
+      database,
+      provider,
+      normalized.event,
+      payloadHash,
+      now,
+    );
+    if (stored.duplicate) {
+      const existing = await database.paymentWebhookEvent.findUniqueOrThrow({
+        where: { id: stored.webhookId },
+        select: { processingStatus: true },
+      });
+      if (["PROCESSED", "REQUIRES_REVIEW"].includes(existing.processingStatus)) {
+        return loadExistingResult(database, stored.webhookId, true);
+      }
+    }
+    const result = await processVerifiedWebhookRecord(database, stored.webhookId, options);
+    return { ...result, duplicate: stored.duplicate };
+  }
+
+  const stored = await storeVerifiedFinancialWebhook(
     database,
     provider,
-    event,
-    hashPaymentWebhookPayload(input.rawBody),
+    normalized,
+    payloadHash,
     now,
   );
-  if (stored.duplicate) {
-    const existing = await database.paymentWebhookEvent.findUniqueOrThrow({
-      where: { id: stored.webhookId },
-      select: { processingStatus: true },
-    });
-    if (["PROCESSED", "REQUIRES_REVIEW"].includes(existing.processingStatus)) {
-      return loadExistingResult(database, stored.webhookId, true);
-    }
-  }
-  const result = await processVerifiedWebhookRecord(database, stored.webhookId, options);
-  return { ...result, duplicate: stored.duplicate };
+  const result =
+    normalized.category === "REFUND"
+      ? await processVerifiedRefundRecord(database, stored.webhookId, options)
+      : await processVerifiedDisputeRecord(database, stored.webhookId, options);
+  return { ...result, duplicate: stored.duplicate || result.duplicate };
 }

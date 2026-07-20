@@ -204,3 +204,27 @@ that would imply more precision than a histogram carries.
 
 Per-process counters reset on restart. Only the PostgreSQL aggregates survive a
 deployment; treat the process block as instantaneous, not historical.
+
+## Phase 5C2A: financial metrics and probes
+
+### Bounded labels
+
+Financial metrics use closed label sets only: refund status, dispute status, ledger entry type, and ISO currency code. Refund references, order ids, booking references, user ids, emails, provider identifiers, and IP addresses are deliberately absent — any of them as a label would make the series unbounded and turn a dashboard into a customer-data export.
+
+`collectOperationalMetrics` gains a `financials` section covering refunds by status, reconciliation backlog, oldest pending age, provider failures and timeouts, refunded amount by currency, disputes by status, evidence-due count, disputed amount by currency, ledger entry counts by type, unprocessed refund/dispute webhook counts, and the ticket-revocation backlog.
+
+### Live probes and fail-closed behaviour
+
+`financial-probes.ts` supplies four deployment gates: refund reconciliation backlog, unresolved chargebacks, ledger divergence, and ticket-revocation backlog. Each is read-only, bounded, and indexed, and each runs in isolation so one failure does not mask the others.
+
+A probe that fails returns an explicit failure **by name**, never a comforting zero, and `production:check` blocks on `financial_probe_unavailable`. This is the point: reporting "no backlog" because a query threw is how a broken check becomes a green light. The behaviour was confirmed in practice when PostgreSQL stopped mid-session and the gate blocked rather than reporting healthy.
+
+Thresholds come from validated configuration: `REFUND_BACKLOG_STALE_SECONDS` (a refund still moving normally is not backlog), `FINANCIAL_DIVERGENCE_SCAN_LIMIT` (caps the scan so a preflight cannot itself become an outage), `DEPLOY_MAX_REFUND_BACKLOG`, and `DEPLOY_MAX_UNRESOLVED_CHARGEBACKS`.
+
+Probe failures report a probe name only. A driver message can quote schema and connection details, so it is dropped rather than surfaced.
+
+### Operational reporting
+
+`npm run financial:report` prints bounded aggregates — refund and dispute queue depths, oldest pending age, divergence counts by reason, and revocation backlog — with no reference, id, email, or provider identifier. When a probe could not be evaluated it says so explicitly and instructs the reader to treat that gate as unknown rather than zero.
+
+The `REFUND_RECONCILIATION` and `FINANCIAL_OUTBOX_DISPATCHER` worker types report liveness through the Phase 5C1 `WorkerHeartbeat` table, so a stopped reconciler is visible in readiness without any Redis dependency.

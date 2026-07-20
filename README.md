@@ -226,3 +226,69 @@ npm run chaos:verify
 PostgreSQL and Redis run from durable local paths rather than `%TEMP%`, which a
 Windows cleanup can delete. Start them before running the database-backed
 suites; `PG_BIN_DIR` points the backup tooling at the PostgreSQL binaries.
+
+## Phase 5C2A — refunds, disputes, and the financial ledger
+
+Refunds, disputes, chargebacks, an append-only financial ledger, external
+provider adapters, and the customer/organizer/admin financial interfaces.
+
+**External providers are disabled by default.** Stripe and Resend adapters are
+built on the official SDKs and are constructed only when explicitly selected
+*and* fully configured, so a leftover credential cannot switch a deployment onto
+a live payment network or start sending real email. `STRIPE_MODE` and
+`RESEND_MODE` have no default — the mode must be stated, never inferred.
+
+> **Verification status.** The Stripe and Resend adapters compile and are
+> type-checked, but have **not** been verified against real sandbox
+> credentials, which are absent from this environment. External sandbox suites
+> are reported as *SKIPPED — credentials absent*. **No real-money charge and no
+> real customer email has occurred.** Sandbox, staging, and launch are Phase
+> 5C2B. See [docs/phase-5c2a-external-providers.md](docs/phase-5c2a-external-providers.md).
+
+### Financial guarantees
+
+- **Refunds never rewrite the original payment.** What the customer paid stays
+  recorded; a refund adds new, independently auditable state.
+- **Over-refunding is prevented by PostgreSQL**, via trigger-maintained
+  aggregates whose row lock serializes concurrent refunds, plus a CHECK
+  constraint. Sixteen simultaneous requests stay within the captured amount.
+- **Only a verified provider webhook settles money.** Not a browser redirect,
+  not a client response, not an organizer, not Redis.
+- **The ledger is append-only.** A trigger rejects every UPDATE and DELETE.
+- **Refunds never reopen inventory.** A refunded seat stays `BOOKED`; resale is
+  a future controlled phase.
+- **Used tickets stay used.** A scanned ticket keeps its redemption history and
+  is never rewritten by a refund or a lost dispute.
+- **Financial probes fail closed.** A probe that cannot be evaluated blocks the
+  deployment gate rather than reporting a comforting zero.
+
+### Financial operations
+
+```bash
+npm run financial:report                     # read-only aggregates
+npm run refunds:reconcile -- all --dry-run   # what would be done
+npm run refunds:reconcile -- ambiguous       # adopt provider-side refunds
+npm run production:check                     # deployment gates
+```
+
+No command can settle a refund, fabricate a dispute, reopen inventory, or
+rewrite financial history.
+
+### Documentation
+
+- [Refunds and disputes](docs/refunds-and-disputes.md)
+- [Financial ledger](docs/financial-ledger.md)
+- [Provider secret rotation](docs/provider-secret-rotation.md)
+- [Refund reconciliation](docs/refund-reconciliation.md)
+- [Phase 5C2A external providers](docs/phase-5c2a-external-providers.md)
+
+### Browser verification
+
+```bash
+npm run test:browser
+```
+
+Runs against a production build (the dev server injects a hot-reload socket and
+a dev-tools portal that make "no console errors" unverifiable) and against the
+disposable test database — never the development one. Sessions are obtained by
+signing in through the real login form; nothing forges a session.

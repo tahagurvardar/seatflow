@@ -62,6 +62,42 @@ export interface OperationalMetrics {
     duplicateScanAttempts: number;
     unauthorizedScannerAttempts: number;
   };
+  /**
+   * Phase 5C2A financial metrics. Every label is a status, an entry type, or a
+   * currency code — all closed sets. Refund references, order ids, booking
+   * references, user ids, emails, provider identifiers, and IP addresses are
+   * deliberately absent: any of them as a label would make the series unbounded
+   * and turn an operational dashboard into a customer-data export.
+   */
+  financials: {
+    refunds: {
+      byStatus: Record<string, number>;
+      requestedTotal: number;
+      reconciliationBacklog: number;
+      oldestPendingAgeSeconds: number;
+      providerFailures: number;
+      providerTimeouts: number;
+    };
+    /** Keyed by ISO currency code, a closed set of four. */
+    refundedAmountMinorByCurrency: Record<string, number>;
+    disputes: {
+      byStatus: Record<string, number>;
+      openTotal: number;
+      lostTotal: number;
+      evidenceDueSoon: number;
+      disputedAmountMinorByCurrency: Record<string, number>;
+    };
+    ledger: {
+      entryCountByType: Record<string, number>;
+      divergenceCount: number;
+    };
+    webhooks: {
+      refundEventsUnprocessed: number;
+      disputeEventsUnprocessed: number;
+      verificationFailures: number;
+    };
+    ticketRevocationBacklog: number;
+  };
   workers: Array<{
     workerType: string;
     role: string;
@@ -71,6 +107,132 @@ export interface OperationalMetrics {
     version: string | null;
   }>;
   process: ReturnType<ReturnType<typeof getMetricsRegistry>["snapshot"]>;
+}
+
+/**
+ * Financial aggregates, grouped so the label sets stay closed. Collected
+ * separately from the main batch to keep each query independently bounded.
+ */
+async function collectFinancialMetrics(
+  database: PrismaClient,
+  now: Date,
+): Promise<OperationalMetrics["financials"]> {
+  const evidenceSoon = new Date(now.getTime() + 48 * 3_600_000);
+
+  const [
+    refundsByStatus,
+    oldestPendingRefund,
+    refundAttemptFailures,
+    refundAttemptTimeouts,
+    refundedByCurrency,
+    disputesByStatus,
+    disputedByCurrency,
+    evidenceDueSoon,
+    ledgerByType,
+    refundEventsUnprocessed,
+    disputeEventsUnprocessed,
+    revocationBacklog,
+  ] = await Promise.all([
+    database.refund.groupBy({ by: ["status"], _count: { _all: true } }),
+    database.refund.findFirst({
+      where: { status: { in: ["REQUESTED", "SUBMITTING", "PROCESSING"] } },
+      orderBy: { requestedAt: "asc" },
+      select: { requestedAt: true },
+    }),
+    database.refundAttempt.count({ where: { status: "FAILED" } }),
+    database.refundAttempt.count({ where: { status: "TIMEOUT" } }),
+    database.refund.groupBy({
+      by: ["currency"],
+      where: { succeededAt: { not: null } },
+      _sum: { requestedAmountMinor: true },
+    }),
+    database.paymentDispute.groupBy({ by: ["status"], _count: { _all: true } }),
+    database.paymentDispute.groupBy({
+      by: ["currency"],
+      where: { status: { notIn: ["WON"] } },
+      _sum: { disputedAmountMinor: true },
+    }),
+    database.paymentDispute.count({
+      where: {
+        status: { in: ["OPEN", "NEEDS_RESPONSE", "UNDER_REVIEW"] },
+        evidenceDueAt: { not: null, lte: evidenceSoon },
+      },
+    }),
+    database.financialLedgerEntry.groupBy({ by: ["entryType"], _count: { _all: true } }),
+    database.paymentWebhookEvent.count({
+      where: { eventCategory: "REFUND", processingStatus: { in: ["RECEIVED", "FAILED"] } },
+    }),
+    database.paymentWebhookEvent.count({
+      where: { eventCategory: "DISPUTE", processingStatus: { in: ["RECEIVED", "FAILED"] } },
+    }),
+    database.ticket.count({ where: { status: "ACTIVE", booking: { status: "REFUNDED" } } }),
+  ]);
+
+  const refundStatusCounts: Record<string, number> = {};
+  let requestedTotal = 0;
+  for (const row of refundsByStatus) {
+    refundStatusCounts[row.status] = row._count._all;
+    requestedTotal += row._count._all;
+  }
+
+  const disputeStatusCounts: Record<string, number> = {};
+  for (const row of disputesByStatus) {
+    disputeStatusCounts[row.status] = row._count._all;
+  }
+
+  const ledgerCounts: Record<string, number> = {};
+  for (const row of ledgerByType) {
+    ledgerCounts[row.entryType] = row._count._all;
+  }
+
+  const refundedAmounts: Record<string, number> = {};
+  for (const row of refundedByCurrency) {
+    refundedAmounts[row.currency] = row._sum.requestedAmountMinor ?? 0;
+  }
+
+  const disputedAmounts: Record<string, number> = {};
+  for (const row of disputedByCurrency) {
+    disputedAmounts[row.currency] = row._sum.disputedAmountMinor ?? 0;
+  }
+
+  const reconciliationBacklog =
+    (refundStatusCounts.REQUIRES_REVIEW ?? 0) +
+    (refundStatusCounts.SUBMITTING ?? 0) +
+    (refundStatusCounts.PROCESSING ?? 0);
+
+  return {
+    refunds: {
+      byStatus: refundStatusCounts,
+      requestedTotal,
+      reconciliationBacklog,
+      oldestPendingAgeSeconds: ageSeconds(now, oldestPendingRefund?.requestedAt),
+      providerFailures: refundAttemptFailures,
+      providerTimeouts: refundAttemptTimeouts,
+    },
+    refundedAmountMinorByCurrency: refundedAmounts,
+    disputes: {
+      byStatus: disputeStatusCounts,
+      openTotal:
+        (disputeStatusCounts.OPEN ?? 0) +
+        (disputeStatusCounts.NEEDS_RESPONSE ?? 0) +
+        (disputeStatusCounts.UNDER_REVIEW ?? 0),
+      lostTotal: disputeStatusCounts.LOST ?? 0,
+      evidenceDueSoon,
+      disputedAmountMinorByCurrency: disputedAmounts,
+    },
+    ledger: {
+      entryCountByType: ledgerCounts,
+      divergenceCount: disputeStatusCounts.REQUIRES_REVIEW ?? 0,
+    },
+    webhooks: {
+      refundEventsUnprocessed,
+      disputeEventsUnprocessed,
+      // Invalid signatures are never stored, so this counts stored envelopes
+      // that failed processing rather than failed verification attempts.
+      verificationFailures: refundEventsUnprocessed + disputeEventsUnprocessed,
+    },
+    ticketRevocationBacklog: revocationBacklog,
+  };
 }
 
 export async function collectOperationalMetrics(
@@ -162,9 +324,11 @@ export async function collectOperationalMetrics(
   }
 
   const duration = deliveryDurations[0];
+  const financials = await collectFinancialMetrics(database, now);
 
   return {
     collectedAt: now.toISOString(),
+    financials,
     inventory: {
       outboxPending,
       outboxDeadLetters,

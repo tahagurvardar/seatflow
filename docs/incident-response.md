@@ -504,3 +504,50 @@ every backlog trends to zero.
 
 **Escalation** — Escalate if a worker restarts repeatedly, or if a backlog keeps
 growing while the worker reports healthy.
+
+## Phase 5C2A: financial incidents
+
+### Guiding rule
+
+Financial state is append-only and trigger-maintained. There is no repair script, and none should be written. When something looks wrong the answer is investigation, not correction.
+
+### Refund stuck in PROCESSING
+
+Most often a provider timeout after the request was accepted. The refund is deliberately **not** failed, because the external refund may exist and failing it would let a retry pay the customer twice.
+
+1. `npm run financial:report` — check backlog and oldest pending age.
+2. `npm run refunds:reconcile -- ambiguous --dry-run` — see what would be inspected.
+3. `npm run refunds:reconcile -- ambiguous` — asks the provider what exists under our own precommitted idempotency key and adopts it. This only attaches the external identifier; settlement still requires a verified webhook.
+
+If nothing matches, the refund is reported as still unknown. Do not force it.
+
+### Ledger divergence
+
+`production:check` blocks on any divergence. This means the append-only ledger and the stored aggregates disagree, so one of them is wrong and something upstream failed.
+
+1. `npm run financial:report` — divergence count by reason.
+2. Identify affected payments through `detectFinancialDivergence`.
+3. **Do not** attempt to correct the ledger; it rejects writes by design.
+4. Treat as a data-integrity incident and involve whoever owns payments.
+
+Note that payments captured before Phase 5C2A have no ledger entries and are correctly out of scope; they are not divergence.
+
+### Refund and dispute overlap
+
+A customer already refunded who also wins a chargeback is compensated twice. This is detected and raised for review, never auto-resolved — deciding what to do about double compensation is a human judgement, not a rule a script should apply to someone's money. The order moves to `CHARGEBACK_REVIEW`.
+
+### Contradictory provider terminal events
+
+A provider reporting success then failure for one refund, or WON then LOST for one dispute, freezes the record as `REQUIRES_REVIEW` with the first outcome preserved. A contradicted dispute deliberately records **no** chargeback. Resolve with the provider before any manual action.
+
+### Ticket revocation backlog
+
+Refunded bookings still holding an active ticket mean refunded admission is still valid. `production:check` blocks on any backlog. Investigate why revocation did not complete; the outbox and reconciliation are the recovery path.
+
+### Verified webhooks not processed
+
+A crash between storing and processing leaves verified events unprocessed. `npm run refunds:reconcile -- webhooks` replays them idempotently.
+
+### Probe failure
+
+If `production:check` reports `financial_probe_unavailable`, the gates are unknown, not clear. Resolve the probe failure — usually database reachability — before deploying. Never interpret an unevaluated gate as a pass.

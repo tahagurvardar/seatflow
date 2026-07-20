@@ -133,3 +133,53 @@ Logs use an allow-list. A key whose normalized form contains a sensitive fragmen
 Clients never receive a stack trace, driver message, provider response, or schema detail. An expected domain rejection may explain itself; an internal failure returns a generic sentence plus a correlation ID.
 
 The security header policy sets a per-request nonce with `strict-dynamic`, denies framing and plugins, restricts the referrer, and grants only `camera=(self)` for the organizer scanner. `style-src` keeps `'unsafe-inline'` because inline style attributes position the seat map and cannot be nonce-covered; scripts remain nonce-gated, which is where the XSS risk actually lies. Sensitive API responses carry `private, no-store`; authenticated HTML pages receive the framework's `no-cache, must-revalidate`, which requires revalidation but permits storage — a documented limitation rather than a claim.
+
+## Phase 5C2A: refunds, disputes, and the financial boundary
+
+**Only a cryptographically verified provider webhook can settle money.** A browser redirect, a client response, an organizer action, and Redis all cannot. Even the provider's own reply during refund submission is a receipt, not authority: the only path that may set `Refund.succeededAt` is reached after a signature check over the exact raw request bytes.
+
+**Over-refunding is prevented by PostgreSQL, not by careful callers.** Two trigger-maintained aggregates live on `PaymentAttempt`. Every refund write updates that row, which takes a row lock and serializes concurrent refund creation for one payment, and a CHECK constraint rejects any total exceeding the captured amount. Sixteen simultaneous refund requests against one payment stay within the captured amount; this is asserted by the integration suite.
+
+**No client input decides money.** The refund form carries a booking reference, a scope, the customer's own seat identifiers, and a submission nonce. Amount, currency, provider, payment ancestry, ownership, and eligibility are all derived server-side. A field naming an amount, currency, user, organization, or status is not read at all.
+
+**Authorization by role.** A customer may only act on their own booking, and their submission is a *request*, never refund authority. An organizer may read aggregates for organizations they are a member of, resolved from membership rather than from any client-supplied identifier, and has no control that can settle a refund or create a dispute. A platform admin sees the operational queues; the page deliberately contains no financial adjustment control.
+
+**Cross-tenant reads are impossible by construction.** Organizer queries are filtered by the organization id that the membership lookup returned. A guessed slug renders as not-found, identical to a slug that does not exist, so tenant existence is not observable.
+
+**Disputes cannot be fabricated.** No function reachable from a browser, an organizer, or an admin opens, advances, or closes a dispute; only a verified provider webhook does. The first terminal outcome is permanent, and a provider that contradicts itself freezes the dispute for a human rather than flipping it — notably without recording a chargeback.
+
+**Webhook secret rotation closes by itself.** A previous secret requires an explicit expiry, is refused if it exceeds seven days or equals the current secret, and simply stops being offered for verification once it lapses. An invalid window verifies nothing at all rather than falling back. Verification tries every candidate in constant time for the local provider, and uses Stripe's own `constructEvent` for the external one.
+
+**Exact-once webhook processing.** Payment, refund, and dispute events share one table so a single unique `(provider, providerEventId)` gives replay protection across every financial event type. Defence is layered: the unique event id, a row lock on the webhook record, deterministic ledger idempotency keys, and marking the webhook processed only inside the transaction that applied the change.
+
+**The ledger cannot be edited.** A trigger rejects every UPDATE and DELETE on `FinancialLedgerEntry`. Provider references are stored only as SHA-256 hashes, so reading the full financial history exposes no provider identifier.
+
+**Secrets never appear in output.** `production:check` findings name the variable at fault and never its value, asserted by a unit test. Probe failures report a probe name, never a driver message. Reconciliation commands print bounded aggregates only. Browser tests assert that no provider key, webhook secret, connection string, ticket credential, provider identifier, or webhook signature appears in rendered markup.
+
+**Financial probes fail closed.** A probe that cannot be evaluated is reported as an explicit unknown and blocks the deployment gate. Treating a failed probe as "no backlog" would mean the one time the check could not see the books is the one time it waves a deployment through.
+
+**Email content is gated centrally.** Ticket credentials, provider keys, webhook secrets, notification API keys, connection strings, and embedded QR images are refused before any adapter sends. Recipient and subject are validated against CR/LF injection. In Resend test mode every message is redirected to one approved test recipient, so a misconfigured non-production deployment cannot email a real customer.
+
+### The isolated end-to-end test exception
+
+Browser verification must run against a **production build**, because the dev server injects a hot-reload socket and a dev-tools portal that make "no console errors" and "no framework overlay" unverifiable. A production build sets `NODE_ENV=production`, where the development-only `LOCAL_SIGNED` provider is forbidden — the rule that must not be weakened.
+
+`src/features/operations/e2e-test-mode.ts` is the single, narrow, audited exception. It grants nothing on its own and requires **every** one of the following to hold simultaneously:
+
+| Condition | Refusal reason |
+|---|---|
+| `SEATFLOW_E2E_TEST_MODE=true` | `FLAG_NOT_SET` |
+| `DATABASE_URL` names a clearly test-marked database | `DATABASE_NOT_TEST_MARKED` |
+| That database is not the protected development/production one | `DATABASE_IS_PROTECTED` |
+| `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` are loopback | `ORIGIN_NOT_LOOPBACK` |
+| A synthetic local webhook secret of at least 32 characters is present | `LOCAL_SECRET_MISSING` |
+| **No** real provider credential (`STRIPE_SECRET_KEY`, `RESEND_API_KEY`) is present | `REAL_PROVIDER_CREDENTIALS_PRESENT` |
+
+The flag alone proves nothing; a real deployment fails the database, origin, and credential conditions. The predicate is pure — no `process.env`, no I/O, no clock — so every refusal path is unit tested.
+
+Two further containments:
+
+- **`production:check` blocks on the flag's mere presence** (`e2e_test_mode_enabled`), regardless of whether the other conditions happen to hold. A deployment serving real traffic has no business carrying it.
+- The override is **not reachable from any customer-controlled input**. It is read from process environment only, never from a request, header, cookie, or form field.
+
+The browser harness itself never bypasses authentication or authorization: it signs in through the real login form, and it never writes a Refund, RefundAttempt, Booking, BookingSeat, Ticket, TicketCredential, inventory, ledger, dispute, or webhook-processing row. Its only privileged act is generating a valid synthetic LOCAL_SIGNED signature and POSTing it to the application's own webhook route, exactly as the provider would.

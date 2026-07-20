@@ -372,11 +372,20 @@ describe("Phase 4B Redis outage and BullMQ automation", () => {
     try {
       await registerHoldExpirySchedule(queue, environment);
       expect(await queue.getJobSchedulers()).toHaveLength(1);
+      // Wait for *these two* sweeps specifically, by job id.
+      //
+      // `registerHoldExpirySchedule` installs a repeatable job, so the workers
+      // can also complete scheduler-produced jobs. Counting bare completions
+      // let two scheduler completions satisfy the wait before either manual
+      // sweep had run, and the assertions below then saw both holds still
+      // ACTIVE. Matching on job id makes the wait mean what it says.
+      const awaitedJobIds = new Set(["redis-sweep-one", "redis-sweep-two"]);
       const completed = new Promise<void>((resolve, reject) => {
-        let count = 0;
-        const onComplete = () => {
-          count += 1;
-          if (count === 2) resolve();
+        const seen = new Set<string>();
+        const onComplete = (job: { id?: string | null }) => {
+          if (!job?.id || !awaitedJobIds.has(job.id)) return;
+          seen.add(job.id);
+          if (seen.size === awaitedJobIds.size) resolve();
         };
         firstWorker.on("completed", onComplete);
         secondWorker.on("completed", onComplete);

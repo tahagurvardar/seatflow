@@ -26,7 +26,9 @@ export type ProcessRole =
   | "realtime_gateway"
   | "ticket_issuance_dispatcher"
   | "notification_dispatcher"
-  | "payment_reconciliation";
+  | "payment_reconciliation"
+  | "refund_reconciliation"
+  | "financial_outbox_dispatcher";
 
 export interface ReadinessCheck {
   /** Bounded label, never a URL, hostname, or connection string. */

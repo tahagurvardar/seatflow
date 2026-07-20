@@ -141,6 +141,7 @@ enum CheckoutOrderStatus {
 enum PaymentProviderName {
   LOCAL_SIGNED
   EXTERNAL
+  STRIPE
 }
 
 enum PaymentAttemptStatus {
@@ -164,8 +165,142 @@ enum PaymentWebhookProcessingStatus {
   FAILED
 }
 
+/// Phase 5C2A. One verified provider webhook table serves payment, refund, and
+/// dispute events so that a single unique (provider, providerEventId) pair gives
+/// exact-once replay protection across every financial event type.
+enum PaymentWebhookEventCategory {
+  PAYMENT
+  REFUND
+  DISPUTE
+}
+
+enum RefundStatus {
+  REQUESTED
+  SUBMITTING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REQUIRES_REVIEW
+}
+
+enum RefundReasonCode {
+  CUSTOMER_REQUEST
+  EVENT_CANCELLED
+  SESSION_RESCHEDULED
+  DUPLICATE_PAYMENT
+  GOODWILL
+  OPERATIONAL_ERROR
+  DISPUTE_RESOLUTION
+  FRAUD_REVIEW
+}
+
+/// How the refundable amount was derived. Every scope is priced from immutable
+/// booking snapshots, never from current event pricing or client input.
+enum RefundScope {
+  FULL_BOOKING
+  SELECTED_SEATS
+  FIXED_AMOUNT
+}
+
+enum RefundInitiator {
+  CUSTOMER
+  ORGANIZER
+  PLATFORM_ADMIN
+  SYSTEM
+}
+
+enum RefundAttemptStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  TIMEOUT
+}
+
+enum DisputeStatus {
+  OPEN
+  NEEDS_RESPONSE
+  UNDER_REVIEW
+  WON
+  LOST
+  CLOSED
+  REQUIRES_REVIEW
+}
+
+enum DisputeReasonCategory {
+  FRAUDULENT
+  PRODUCT_NOT_RECEIVED
+  DUPLICATE
+  CREDIT_NOT_PROCESSED
+  SUBSCRIPTION_CANCELED
+  GENERAL
+  UNRECOGNIZED
+}
+
+enum DisputeOutcome {
+  WON
+  LOST
+  WITHDRAWN
+  UNRESOLVED
+}
+
+enum LedgerEntryType {
+  PAYMENT_AUTHORIZED
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  REFUND_REQUESTED
+  REFUND_PROCESSING
+  REFUND_SUCCEEDED
+  REFUND_FAILED
+  REFUND_CANCELLED
+  DISPUTE_OPENED
+  DISPUTE_UPDATED
+  DISPUTE_WON
+  DISPUTE_LOST
+  CHARGEBACK_RECORDED
+  MANUAL_ADJUSTMENT_REQUESTED
+}
+
+/// Direction from the platform's perspective: CREDIT increases what the platform
+/// holds, DEBIT decreases it. A refund or lost dispute is always a DEBIT.
+enum LedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum FinancialReviewState {
+  NONE
+  REFUND_REVIEW
+  DISPUTE_REVIEW
+  CHARGEBACK_REVIEW
+  DIVERGENCE_REVIEW
+}
+
+enum FinancialOutboxEventType {
+  REFUND_REQUESTED
+  REFUND_SUBMITTED
+  REFUND_PROCESSING
+  REFUND_SUCCEEDED
+  REFUND_FAILED
+  REFUND_REQUIRES_REVIEW
+  DISPUTE_OPENED
+  DISPUTE_UPDATED
+  DISPUTE_WON
+  DISPUTE_LOST
+  CHARGEBACK_RECORDED
+  TICKET_REVOCATION_REQUESTED
+  FINANCIAL_RECONCILIATION_REQUIRED
+}
+
+enum FinancialOutboxStatus {
+  PENDING
+  PROCESSED
+  DEAD_LETTER
+}
+
 enum BookingStatus {
   CONFIRMED
+  REFUNDED
 }
 
 enum TicketStatus {
@@ -213,6 +348,11 @@ enum NotificationType {
   BOOKING_TICKETS_READY
   CREDENTIAL_ROTATED
   TICKET_REVOKED
+  REFUND_REQUESTED
+  REFUND_SUCCEEDED
+  REFUND_FAILED
+  REFUND_REQUIRES_REVIEW
+  DISPUTE_OPENED
 }
 
 enum NotificationOutboxStatus {
@@ -224,6 +364,7 @@ enum NotificationOutboxStatus {
 enum NotificationProviderName {
   LOCAL_FILE
   EXTERNAL
+  RESEND
 }
 
 enum NotificationDeliveryStatus {
@@ -257,6 +398,8 @@ model User {
   ticketDownloadGrants     TicketDownloadGrant[]
   ticketAuditEvents        TicketAuditEvent[]      @relation("TicketAuditActor")
   notificationOutbox       NotificationOutbox[]    @relation("NotificationRecipient")
+  refundsRequested         Refund[]                @relation("RefundRequestedBy")
+  refundsApproved          Refund[]                @relation("RefundApprovedBy")
 }
 
 model Account {
@@ -716,14 +859,21 @@ model CheckoutOrder {
   safeFailureCode   String?
   version           Int                 @default(0)
 
-  user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
-  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  event           Event               @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  session         EventSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  sourceHold      SeatHold            @relation(fields: [sourceHoldId], references: [id], onDelete: Restrict)
+  /// Phase 5C2A. Operational flag only: it never changes what the customer paid
+  /// and never rewrites the order's financial snapshot.
+  financialReviewState FinancialReviewState @default(NONE)
+
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event           Event                  @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  session         EventSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  sourceHold      SeatHold               @relation(fields: [sourceHoldId], references: [id], onDelete: Restrict)
   items           CheckoutOrderItem[]
   paymentAttempts PaymentAttempt[]
   booking         Booking?
+  refunds         Refund[]
+  disputes        PaymentDispute[]
+  ledgerEntries   FinancialLedgerEntry[]
 
   @@unique([userId, sourceHoldId, idempotencyKey])
   @@index([userId, createdAt])
@@ -781,8 +931,20 @@ model PaymentAttempt {
   failedAt               DateTime?            @db.Timestamptz(3)
   cancelledAt            DateTime?            @db.Timestamptz(3)
 
-  order         CheckoutOrder         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  /// Phase 5C2A over-refund guard. These two aggregates are maintained by a
+  /// database trigger on Refund, never by application code. Any refund write
+  /// therefore takes a row lock on this row, which serializes concurrent refund
+  /// creation for one payment, and a CHECK constraint enforces
+  /// refundedMinor + inFlightRefundMinor <= amountMinor. Over-refunding is
+  /// prevented by PostgreSQL itself rather than by cooperating callers.
+  refundedMinor       Int @default(0)
+  inFlightRefundMinor Int @default(0)
+
+  order         CheckoutOrder          @relation(fields: [orderId], references: [id], onDelete: Restrict)
   webhookEvents PaymentWebhookEvent[]
+  refunds       Refund[]
+  disputes      PaymentDispute[]
+  ledgerEntries FinancialLedgerEntry[]
 
   @@unique([orderId, provider])
   @@unique([provider, providerIntentId])
@@ -794,9 +956,11 @@ model PaymentWebhookEvent {
   provider            PaymentProviderName
   providerEventId     String
   eventType           String
+  eventCategory       PaymentWebhookEventCategory    @default(PAYMENT)
   providerIntentId    String
   paymentAttemptId    String?
-  normalizedStatus    PaymentAttemptStatus
+  /// Set only for PAYMENT events; a CHECK constraint enforces that.
+  normalizedStatus    PaymentAttemptStatus?
   amountMinor         Int
   currency            Currency
   signatureStatus     PaymentWebhookSignatureStatus
@@ -808,12 +972,26 @@ model PaymentWebhookEvent {
   safeProcessingError String?
   payloadHash         String                         @db.Char(64)
 
+  /// Phase 5C2A refund and dispute envelopes. Exactly one category's columns are
+  /// populated per row, enforced by a CHECK constraint.
+  normalizedRefundStatus  RefundStatus?
+  normalizedDisputeStatus DisputeStatus?
+  providerRefundId        String?
+  providerDisputeId       String?
+  refundId                String?
+  disputeId               String?
+
   paymentAttempt PaymentAttempt? @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
+  refund         Refund?         @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  dispute        PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
 
   @@unique([provider, providerEventId])
   @@index([paymentAttemptId, receivedAt])
   @@index([processingStatus, receivedAt])
   @@index([provider, providerIntentId])
+  @@index([eventCategory, processingStatus, receivedAt])
+  @@index([refundId, receivedAt])
+  @@index([disputeId, receivedAt])
 }
 
 model Booking {
@@ -830,6 +1008,12 @@ model Booking {
   confirmedAt     DateTime      @db.Timestamptz(3)
   createdAt       DateTime      @default(now()) @db.Timestamptz(3)
 
+  /// Phase 5C2A. A fully refunded booking moves to REFUNDED and records when.
+  /// totalMinor stays exactly what the customer paid: a refund adds new
+  /// append-only financial state, it never rewrites the original payment.
+  refundedAt           DateTime?            @db.Timestamptz(3)
+  financialReviewState FinancialReviewState @default(NONE)
+
   order           CheckoutOrder          @relation(fields: [orderId], references: [id], onDelete: Restrict)
   user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -840,6 +1024,9 @@ model Booking {
   issuanceRequest TicketIssuanceRequest?
   downloadGrants  TicketDownloadGrant[]
   notifications   NotificationOutbox[]
+  refunds         Refund[]
+  disputes        PaymentDispute[]
+  ledgerEntries   FinancialLedgerEntry[]
 
   @@index([userId, confirmedAt])
   @@index([organizationId, confirmedAt])
@@ -865,13 +1052,14 @@ model BookingSeat {
   currency    Currency
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
-  booking   Booking              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
-  inventory SessionSeatInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
-  session   EventSession         @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  seat      Seat                 @relation(fields: [seatId], references: [id], onDelete: Restrict)
-  section   SeatSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  priceTier SessionPriceTier     @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
-  ticket    Ticket?
+  booking     Booking              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  inventory   SessionSeatInventory @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
+  session     EventSession         @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  seat        Seat                 @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  section     SeatSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  priceTier   SessionPriceTier     @relation(fields: [priceTierId], references: [id], onDelete: Restrict)
+  ticket      Ticket?
+  refundSeats RefundSeat[]
 
   @@unique([bookingId, inventoryId])
   @@unique([sessionId, seatId])
@@ -880,6 +1068,227 @@ model BookingSeat {
   @@index([seatId])
   @@index([sectionId])
   @@index([priceTierId])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5C2A: refunds, disputes, and the append-only financial ledger.
+//
+// A refund never mutates the original payment. It creates new, independently
+// auditable state plus append-only ledger entries. Only a cryptographically
+// verified provider webhook may mark an external refund succeeded or move a
+// dispute; a browser redirect, an organizer action, and Redis never can.
+// ---------------------------------------------------------------------------
+
+/// One refund of a captured payment. The requested amount is always derived on
+/// the server from immutable booking snapshots. Concurrency and over-refunding
+/// are prevented by the PaymentAttempt aggregate trigger, not by callers.
+model Refund {
+  id                     String              @id @default(cuid())
+  publicReference        String              @unique
+  orderId                String
+  paymentAttemptId       String
+  bookingId              String
+  requestedByUserId      String?
+  approvedByUserId       String?
+  initiator              RefundInitiator
+  status                 RefundStatus        @default(REQUESTED)
+  reasonCode             RefundReasonCode
+  scope                  RefundScope
+  requestedAmountMinor   Int
+  currency               Currency
+  provider               PaymentProviderName
+  providerRefundId       String?
+  providerIdempotencyKey String              @unique
+  requestedAt            DateTime            @db.Timestamptz(3)
+  submittedAt            DateTime?           @db.Timestamptz(3)
+  succeededAt            DateTime?           @db.Timestamptz(3)
+  failedAt               DateTime?           @db.Timestamptz(3)
+  cancelledAt            DateTime?           @db.Timestamptz(3)
+  reviewRequiredAt       DateTime?           @db.Timestamptz(3)
+  safeFailureCode        String?
+  version                Int                 @default(0)
+  createdAt              DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime            @updatedAt @db.Timestamptz(3)
+
+  order          CheckoutOrder          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentAttempt PaymentAttempt         @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
+  booking        Booking                @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  requestedBy    User?                  @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  approvedBy     User?                  @relation("RefundApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  seats          RefundSeat[]
+  attempts       RefundAttempt[]
+  webhookEvents  PaymentWebhookEvent[]
+  ledgerEntries  FinancialLedgerEntry[]
+
+  @@unique([provider, providerRefundId])
+  @@index([orderId, requestedAt])
+  @@index([bookingId, requestedAt])
+  @@index([paymentAttemptId, status])
+  @@index([status, requestedAt])
+  @@index([requestedByUserId, requestedAt])
+}
+
+/// Immutable snapshot of which booked seats a seat-scoped refund covered. A
+/// booking seat can never be refunded twice while a refund covering it is live.
+model RefundSeat {
+  id            String   @id @default(cuid())
+  refundId      String
+  bookingSeatId String
+  priceMinor    Int
+  currency      Currency
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  refund      Refund      @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  bookingSeat BookingSeat @relation(fields: [bookingSeatId], references: [id], onDelete: Restrict)
+
+  @@unique([refundId, bookingSeatId])
+  @@index([bookingSeatId])
+}
+
+/// One provider submission attempt. Attempts are history and never rewritten.
+model RefundAttempt {
+  id                       String              @id @default(cuid())
+  refundId                 String
+  attemptNumber            Int
+  provider                 PaymentProviderName
+  providerRequestReference String?
+  status                   RefundAttemptStatus
+  startedAt                DateTime            @db.Timestamptz(3)
+  completedAt              DateTime?           @db.Timestamptz(3)
+  safeFailureCode          String?
+  idempotencyKey           String              @unique
+  createdAt                DateTime            @default(now()) @db.Timestamptz(3)
+
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  @@unique([refundId, attemptNumber])
+  @@index([status, startedAt])
+}
+
+/// A provider-raised dispute or chargeback. Only verified provider webhooks may
+/// create or transition one; no organizer or browser action can fabricate it.
+model PaymentDispute {
+  id                  String                @id @default(cuid())
+  publicReference     String                @unique
+  paymentAttemptId    String
+  orderId             String
+  bookingId           String?
+  provider            PaymentProviderName
+  providerDisputeId   String
+  status              DisputeStatus         @default(OPEN)
+  reasonCategory      DisputeReasonCategory @default(UNRECOGNIZED)
+  disputedAmountMinor Int
+  currency            Currency
+  openedAt            DateTime              @db.Timestamptz(3)
+  evidenceDueAt       DateTime?             @db.Timestamptz(3)
+  closedAt            DateTime?             @db.Timestamptz(3)
+  outcome             DisputeOutcome?
+  safeProviderStatus  String?
+  version             Int                   @default(0)
+  createdAt           DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime              @updatedAt @db.Timestamptz(3)
+
+  paymentAttempt PaymentAttempt         @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
+  order          CheckoutOrder          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  booking        Booking?               @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  events         PaymentDisputeEvent[]
+  webhookEvents  PaymentWebhookEvent[]
+  ledgerEntries  FinancialLedgerEntry[]
+
+  @@unique([provider, providerDisputeId])
+  @@index([orderId, openedAt])
+  @@index([bookingId, openedAt])
+  @@index([status, openedAt])
+  @@index([status, evidenceDueAt])
+}
+
+/// Append-only normalized provider dispute history. Raw evidence documents and
+/// provider payloads are deliberately not stored in this phase.
+model PaymentDisputeEvent {
+  id              String         @id @default(cuid())
+  disputeId       String
+  providerEventId String
+  eventType       String
+  previousStatus  DisputeStatus?
+  newStatus       DisputeStatus
+  effectiveAt     DateTime       @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  safeMetadata    Json?
+
+  dispute PaymentDispute @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+
+  @@unique([disputeId, providerEventId])
+  @@index([disputeId, effectiveAt])
+}
+
+/// Append-only financial ledger. Rows are never updated or deleted; a database
+/// trigger enforces that. Uniqueness comes from a deterministic idempotency key
+/// derived from the provider event or the domain action that produced the entry.
+model FinancialLedgerEntry {
+  id                    String              @id @default(cuid())
+  publicReference       String              @unique
+  entryType             LedgerEntryType
+  direction             LedgerDirection
+  amountMinor           Int
+  currency              Currency
+  orderId               String
+  paymentAttemptId      String
+  bookingId             String?
+  refundId              String?
+  disputeId             String?
+  provider              PaymentProviderName
+  /// SHA-256 of the provider reference. The raw provider identifier is never
+  /// stored here, so the ledger can be read by operators without exposing it.
+  providerReferenceHash String?             @db.Char(64)
+  effectiveAt           DateTime            @db.Timestamptz(3)
+  createdAt             DateTime            @default(now()) @db.Timestamptz(3)
+  idempotencyKey        String              @unique
+  correlationId         String?
+  metadataVersion       Int                 @default(1)
+  safeMetadata          Json?
+
+  order          CheckoutOrder   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentAttempt PaymentAttempt  @relation(fields: [paymentAttemptId], references: [id], onDelete: Restrict)
+  booking        Booking?        @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  refund         Refund?         @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  dispute        PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, effectiveAt])
+  @@index([paymentAttemptId, effectiveAt])
+  @@index([bookingId, effectiveAt])
+  @@index([refundId, effectiveAt])
+  @@index([disputeId, effectiveAt])
+  @@index([entryType, effectiveAt])
+  @@index([currency, entryType])
+}
+
+/// Transactional financial outbox. Rows are committed in the same PostgreSQL
+/// transaction as the financial state they describe. Payloads carry no customer
+/// email, provider secret, payment method, raw provider event, signature,
+/// ticket credential, or connection string.
+model FinancialOutbox {
+  id               String                   @id @default(uuid())
+  eventType        FinancialOutboxEventType
+  aggregateId      String?
+  orderId          String?
+  refundId         String?
+  disputeId        String?
+  bookingId        String?
+  payload          Json
+  deduplicationKey String                   @unique
+  status           FinancialOutboxStatus    @default(PENDING)
+  availableAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  attemptCount     Int                      @default(0)
+  processedAt      DateTime?                @db.Timestamptz(3)
+  lastError        String?
+  deadLetterAt     DateTime?                @db.Timestamptz(3)
+  createdAt        DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                 @updatedAt @db.Timestamptz(3)
+
+  @@index([status, availableAt, createdAt])
+  @@index([eventType, createdAt])
+  @@index([refundId])
+  @@index([disputeId])
 }
 
 // One independently controlled admission ticket per confirmed booked seat.
@@ -1116,6 +1525,8 @@ enum WorkerType {
   PAYMENT_RECONCILIATION
   TICKET_ISSUANCE_DISPATCHER
   NOTIFICATION_DISPATCHER
+  REFUND_RECONCILIATION
+  FINANCIAL_OUTBOX_DISPATCHER
 }
 
 enum WorkerHealthStatus {

@@ -34,6 +34,8 @@ export const ROUTES = {
     `/api/tickets/${ticketReference}/qr` as const,
   organizerEvents: (organizationSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events` as const,
+  organizerFinancial: (organizationSlug: string) =>
+    `/organizer/organizations/${organizationSlug}/financial` as const,
   organizerNewEvent: (organizationSlug: string) =>
     `/organizer/organizations/${organizationSlug}/events/new` as const,
   organizerEvent: (organizationSlug: string, eventSlug: string) =>

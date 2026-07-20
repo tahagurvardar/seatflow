@@ -11,6 +11,7 @@ import {
   evaluateWorkerFleet,
   normalizeInstanceLabel,
   recordWorkerHeartbeat,
+  WORKER_ROLE_BY_TYPE,
 } from "../../src/server/operations/worker-heartbeat";
 import { acquireSeatHold } from "../../src/server/holds/hold-service";
 import {
@@ -95,10 +96,14 @@ describe("Phase 5C1 worker heartbeats", () => {
     expect(gateway.label).toBe("stale");
     expect(gateway.ageSeconds).toBeGreaterThan(180);
 
-    // Every expected worker type is reported, including ones never seen.
-    expect(fleet).toHaveLength(6);
+    // Every expected worker type is reported, including ones never seen. The
+    // expected size comes from the worker registry rather than a literal, so
+    // adding a worker type in a later phase cannot silently stop this from
+    // checking the whole fleet.
+    const expectedFleetSize = Object.keys(WORKER_ROLE_BY_TYPE).length;
+    expect(fleet).toHaveLength(expectedFleetSize);
     const missing = fleet.filter((worker) => worker.label === "missing");
-    expect(missing.length).toBe(5);
+    expect(missing.length).toBe(expectedFleetSize - 1);
   });
 
   it("classifies a deliberate shutdown as stopped rather than crashed", async () => {
@@ -320,7 +325,7 @@ describe("Phase 5C1 operational metrics", () => {
 
     expect(metrics.inventory.outboxPending).toBeGreaterThan(0);
     expect(metrics.tickets.issuancePending).toBe(0);
-    expect(metrics.workers).toHaveLength(6);
+    expect(metrics.workers).toHaveLength(Object.keys(WORKER_ROLE_BY_TYPE).length);
     expect(typeof metrics.inventory.transactionRetryCount).toBe("string");
 
     const serialized = JSON.stringify(metrics);

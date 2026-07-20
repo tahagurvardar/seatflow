@@ -101,3 +101,42 @@ rolled-back code; fix forward instead. See incident runbook 14.
   exists.
 
 Both are Phase 5C2 work. Until then, production traffic must remain disabled.
+
+## Phase 5C2A additions
+
+### New deployment gates
+
+`production:check` now blocks on, in addition to the Phase 5C1 gates:
+
+| Gate | Blocks when |
+|---|---|
+| `stripe_*` | Stripe selected but key, webhook secret, or explicit mode missing; live mode holding a test key or the reverse; test mode reaching production; rotation window that never closes |
+| `webhook_coverage_incomplete` | Refund or dispute events not declared in `STRIPE_WEBHOOK_EVENTS` |
+| `resend_*` | Resend selected but key, sender identity, or explicit mode missing; test mode reaching production |
+| `refund_backlog_gate` | Refund reconciliation backlog exceeds `DEPLOY_MAX_REFUND_BACKLOG` |
+| `chargeback_gate` | Unresolved chargebacks exceed `DEPLOY_MAX_UNRESOLVED_CHARGEBACKS` |
+| `financial_divergence_gate` | **Any** ledger divergence |
+| `ticket_revocation_gate` | **Any** refunded booking still holding an active ticket |
+| `financial_probe_unavailable` | A financial probe could not be evaluated |
+
+The last one matters most: an unevaluated gate blocks. A failed probe is never read as "no backlog".
+
+### Migration
+
+One additive migration, `20260719120000_phase_5c2a_refunds_disputes_ledger`. Verified to replay cleanly as part of the full chain on the disposable test database, and to deploy non-destructively to a populated database with all existing rows intact.
+
+`Booking_refund_lifecycle_check` compares `"status"::text` deliberately: PostgreSQL forbids using an enum value added earlier in the same transaction, and `REFUNDED` is added by this migration.
+
+### New operational commands
+
+| Command | Mode |
+|---|---|
+| `npm run refunds:reconcile -- <action> [--dry-run] [--batch=N]` | Idempotent; `submit` and `ambiguous` call the provider under precommitted idempotency keys and hold no database lock |
+| `npm run refunds:submit` | Submits pending refunds |
+| `npm run financial:report [-- --json]` | Strictly read-only |
+
+None can settle a refund, create a dispute, reopen inventory, or rewrite history.
+
+### Verification status
+
+Stripe and Resend adapters compile and are type-checked but have **not** been verified against real sandbox credentials, which are absent from this environment. No real-money charge and no real customer email has occurred. A sanitized production-like `production:check` reports no findings, which validates that the configuration rules are satisfiable — it is **not** provider verification. Sandbox, staging, and launch are Phase 5C2B.

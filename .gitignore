@@ -68,3 +68,10 @@ accessibility-report-*.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright browser-verification output
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+tests/browser/.auth/
