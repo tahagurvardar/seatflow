@@ -127,3 +127,27 @@ There is no refund execution, chargeback/dispute workflow, coupon, waitlist, dyn
 Out of scope for Phase 5C1 and unchanged: refunds, disputes, coupons, taxes,
 payouts, settlement, resale or transfer, native applications, and business
 analytics.
+
+## Phase 5C2A: refunds and disputes
+
+### Customer
+
+A customer can see, on their own booking: what they originally paid, what has already been refunded, what is currently in progress, and what remains refundable. They can request a refund of everything still refundable, or of specific seats. Every figure is calculated by the server from the prices captured at purchase; current event pricing is never consulted, so a seat repriced after the sale does not change what its buyer gets back.
+
+A customer's submission is a **request**, not refund authority. The interface never says money has been returned until the payment provider has confirmed it. Statuses shown are Requested, Processing, Succeeded, Failed, Requires review, and Cancelled, described honestly — a failed refund states plainly that no money was taken back and can be requested again.
+
+Refunded tickets stop being valid for entry and say so. A ticket already scanned stays recorded as used; that history is kept.
+
+### Organizer
+
+Organizers see aggregates for their own organization: refund queue depths by state, totals refunded by currency, open disputes and disputed amounts, tickets pending revocation, and the financial review queue. They deliberately have no control that can settle a refund, create a dispute, or adjust a balance — that would let one tenant move platform money without platform oversight. Customer identity and payment details are not shown.
+
+### Platform administrator
+
+Administrators see the operational queues: refunds, disputes and chargebacks, ledger divergence, paid-but-unfulfilled orders, evidence deadlines, revocation backlog, and totals by currency. When a probe cannot be evaluated the page says "unknown" rather than showing a zero. There is no financial adjustment control by design; reconciliation runs through audited command-line operations.
+
+### Deliberate non-goals for this phase
+
+- Refunded seats are **not** automatically returned to sale. Resale eligibility is a future controlled phase; doing it automatically would let a refund silently resell a seat whose holder may still be disputing.
+- No organizer payouts, marketplace settlement, tax calculation, coupons, or ticket resale.
+- No unrestricted manual financial adjustment, in the interface or the command line.

@@ -163,10 +163,29 @@ describe("Phase 5A checkout creation", () => {
     const unavailableProvider: PaymentProvider = {
       name: "LOCAL_SIGNED",
       simulated: true,
+      capabilityReport() {
+        return {
+          provider: "LOCAL_SIGNED",
+          simulated: true,
+          mode: "simulated",
+          supportsPartialRefund: false,
+          supportsRefundReconciliation: false,
+          supportsDisputeEvents: false,
+          supportsWebhookSecretRotation: false,
+          supportedCurrencies: [],
+          safeConfigurationSummary: "unavailable test double",
+        };
+      },
       async createPaymentIntent() { throw new Error("provider timeout"); },
       async retrievePaymentIntent() { throw new Error("provider unavailable"); },
       async cancelPaymentIntent() { throw new Error("provider unavailable"); },
+      async createRefund() { throw new Error("provider unavailable"); },
+      async retrieveRefund() { throw new Error("provider unavailable"); },
+      async listRefundsForPayment() { throw new Error("provider unavailable"); },
+      async retrieveDispute() { throw new Error("provider unavailable"); },
+      async listDisputes() { throw new Error("provider unavailable"); },
       verifyWebhook() { return false; },
+      normalizeWebhookEvent() { throw new Error("not available"); },
       parseWebhookEvent() { throw new Error("not available"); },
     };
 

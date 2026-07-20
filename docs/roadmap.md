@@ -107,18 +107,47 @@ verification, and an honest accessibility audit.
 
 One additive migration (`20260719000000_phase_5c1_worker_heartbeats`).
 
-**Production traffic remains disabled.** `npm run production:check` fails by
-design on two gates: no reviewed external payment adapter and no reviewed
-external notification adapter exist in this build.
+**Production traffic remains disabled.** At the close of 5C1 `production:check`
+failed by design on two gates: no reviewed external payment adapter and no
+reviewed external notification adapter existed in this build. Phase 5C2A
+replaced both gates with real adapters plus explicit credential, mode, and
+webhook-coverage checks; traffic is still disabled because those credentials do
+not exist here.
 
-## Phase 5C2 — external providers (next)
+## Phase 5C2A — external adapters, refunds, disputes, ledger (complete, unverified against real providers)
 
-1. External payment adapter: raw-body signature verification preserved,
-   contract tests mirroring the local signed provider, secret rotation with an
-   overlap window, and a webhook endpoint review.
-2. External notification adapter: bounded template context, provider
-   idempotency, and delivery-status mapping onto the existing outbox.
-3. Refunds and disputes: a new append-only ledger rather than mutation of
-   existing payment rows; inventory release policy decided explicitly.
-4. Re-run every Phase 5C1 gate with the adapters installed, then remove the two
-   deployment gates from `production-check.ts`.
+Delivered: provider-neutral payment and notification boundaries; Stripe and
+Resend adapters built on the official SDKs and disabled unless explicitly
+selected; webhook secret rotation with a window that closes by itself; refund
+requests with server-calculated amounts; refund submission that holds no
+database lock across the provider call; exact-once refund settlement from
+verified webhooks only; an append-only financial ledger; the dispute and
+chargeback lifecycle; deliberate ticket-revocation consequences that never
+reopen inventory; live fail-closed financial probes; reconciliation CLI
+commands; and customer, organizer, and platform-admin financial UI.
+
+One additive migration
+(`20260719120000_phase_5c2a_refunds_disputes_ledger`).
+
+**Stripe and Resend have not been verified against real sandbox credentials.**
+Both adapters compile and are type-checked; neither has made a real call. No
+real-money charge and no real customer email has occurred at any point. See
+[phase-5c2a-external-providers.md](phase-5c2a-external-providers.md) for the
+verification-status table.
+
+`npm run production:check` fails by design in the local configuration. Against a
+sanitized production-like configuration with synthetic placeholders it reports
+no findings, which validates that the configuration rules are satisfiable — not
+that any provider has been verified.
+
+## Phase 5C2B — sandbox verification and launch (next)
+
+1. Real Stripe test-mode verification: payment intent, partial and full refund,
+   refund webhook settlement, dispute events, and secret rotation against a real
+   test account.
+2. Real Resend verification against an approved internal test recipient only.
+3. Authenticated end-to-end browser coverage: the current Playwright suite
+   verifies authorization boundaries, layout, and leak-safety, but does not yet
+   drive a signed-in customer through a refund, because no Better Auth session
+   seed helper exists.
+4. Staging deployment, live-traffic runbook rehearsal, and the launch decision.

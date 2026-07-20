@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  assertSafeEmailAddress,
+  validateOutgoingMessage,
+  type NotificationCapabilityReport,
   type NotificationMessage,
   type NotificationProvider,
   type NotificationSendResult,
@@ -31,11 +32,23 @@ export class LocalFileNotificationProvider implements NotificationProvider {
     }
   }
 
+  capabilityReport(): NotificationCapabilityReport {
+    return {
+      provider: this.name,
+      simulated: true,
+      mode: "simulated",
+      supportsIdempotencyKey: true,
+      supportsReplyTo: false,
+      redirectsToTestRecipient: true,
+      safeConfigurationSummary: "local file capture; no external delivery",
+    };
+  }
+
   async send(message: NotificationMessage): Promise<NotificationSendResult> {
-    assertSafeEmailAddress(message.to);
-    if (/\r|\n/.test(message.subject) || message.subject.length > 160) {
-      return { status: "PERMANENT_FAILURE", safeErrorCode: "PERMANENT_INVALID_HEADER" };
-    }
+    // The same gate the external adapter runs, so the two cannot drift on what
+    // is considered safe to transmit.
+    const rejection = validateOutgoingMessage(message);
+    if (rejection) return rejection;
     if (this.mode === "RETRYABLE_FAILURE") {
       return { status: "RETRYABLE_FAILURE", safeErrorCode: "LOCAL_SIMULATED_RETRYABLE" };
     }

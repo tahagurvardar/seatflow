@@ -40,19 +40,55 @@ async function probeRedis(): Promise<boolean | null> {
   }
 }
 
+/** Every database-backed gate this preflight can evaluate. */
+const DATABASE_PROBE_NAMES = [
+  "migrations",
+  "outbox_dead_letters",
+  "notification_dead_letters",
+  "paid_unfulfilled",
+  "refund_backlog",
+  "unresolved_chargebacks",
+  "financial_divergence",
+  "ticket_revocation_backlog",
+] as const;
+
 async function probeDatabase(): Promise<Partial<ProductionCheckProbes>> {
-  if (!process.env.DATABASE_URL) return {};
+  if (!process.env.DATABASE_URL) {
+    // Nothing was attempted, so nothing is claimed. The missing DATABASE_URL is
+    // itself reported by the configuration rules.
+    return {};
+  }
   try {
-    const [{ createDatabaseClient, disconnectDatabase }, { EXPECTED_LATEST_MIGRATION }] =
-      await Promise.all([
-        import("../src/lib/database"),
-        import("../src/server/operations/readiness"),
-      ]);
+    const [
+      { createDatabaseClient, disconnectDatabase },
+      { EXPECTED_LATEST_MIGRATION },
+      { collectFinancialProbes },
+      { readOperationsEnvironment },
+    ] = await Promise.all([
+      import("../src/lib/database"),
+      import("../src/server/operations/readiness"),
+      import("../src/server/operations/financial-probes"),
+      import("../src/env/schema"),
+    ]);
+
+    let thresholds;
+    try {
+      const operations = readOperationsEnvironment();
+      thresholds = {
+        refundStaleAfterSeconds: operations.REFUND_BACKLOG_STALE_SECONDS,
+        divergenceScanLimit: operations.FINANCIAL_DIVERGENCE_SCAN_LIMIT,
+      };
+    } catch {
+      // Invalid operations configuration is reported by its own rules; the
+      // probes fall back to their documented defaults rather than guessing.
+      thresholds = undefined;
+    }
+
     const database = createDatabaseClient();
     try {
       // Read-only queries only. This command must never mutate a production
       // database it was pointed at.
-      const [migrations, outboxDeadLetters, notificationDeadLetters, paidUnfulfilled] =
+      const [migrations, outboxDeadLetters, notificationDeadLetters, paidUnfulfilled, financial] =
         await Promise.all([
           database.$queryRawUnsafe<Array<{ migration_name: string }>>(
             'SELECT "migration_name" FROM "_prisma_migrations" ORDER BY "migration_name" DESC LIMIT 1',
@@ -62,6 +98,7 @@ async function probeDatabase(): Promise<Partial<ProductionCheckProbes>> {
           database.checkoutOrder.count({
             where: { status: { in: ["PAID_UNFULFILLED", "REQUIRES_REVIEW"] } },
           }),
+          collectFinancialProbes(database, { thresholds }),
         ]);
 
       return {
@@ -69,14 +106,21 @@ async function probeDatabase(): Promise<Partial<ProductionCheckProbes>> {
         outboxDeadLetters,
         notificationDeadLetters,
         paidUnfulfilled,
+        refundReconciliationBacklog: financial.refundReconciliationBacklog,
+        unresolvedChargebacks: financial.unresolvedChargebacks,
+        financialDivergences: financial.financialDivergences,
+        ticketRevocationBacklog: financial.ticketRevocationBacklog,
+        probeFailures: financial.failures,
       };
     } finally {
       await disconnectDatabase();
     }
   } catch {
-    // An unreachable database is reported through the readiness gate rather
-    // than crashing the preflight.
-    return { migrationsBehind: null };
+    // The database could not be reached at all. Previously this returned only
+    // `migrationsBehind: null`, which left every other gate undefined and
+    // therefore silently satisfied. Every probe is now reported as failed, so
+    // an unreachable database blocks rather than passes.
+    return { migrationsBehind: null, probeFailures: [...DATABASE_PROBE_NAMES] };
   }
 }
 

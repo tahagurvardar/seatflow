@@ -29,6 +29,8 @@ export const WORKER_ROLE_BY_TYPE: Record<WorkerType, ProcessRole> = {
   PAYMENT_RECONCILIATION: "payment_reconciliation",
   TICKET_ISSUANCE_DISPATCHER: "ticket_issuance_dispatcher",
   NOTIFICATION_DISPATCHER: "notification_dispatcher",
+  REFUND_RECONCILIATION: "refund_reconciliation",
+  FINANCIAL_OUTBOX_DISPATCHER: "financial_outbox_dispatcher",
 };
 
 /**

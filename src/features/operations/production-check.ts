@@ -26,7 +26,31 @@ export interface ProductionCheckProbes {
   outboxDeadLetters?: number | null;
   notificationDeadLetters?: number | null;
   paidUnfulfilled?: number | null;
+  /** Phase 5C2A financial gates. */
+  refundReconciliationBacklog?: number | null;
+  unresolvedChargebacks?: number | null;
+  financialDivergences?: number | null;
+  ticketRevocationBacklog?: number | null;
+  /**
+   * Names of probes that could not be evaluated. A probe that fails must never
+   * be read as "no backlog": an unevaluated financial gate is treated as a
+   * blocking unknown, not as a pass.
+   */
+  probeFailures?: readonly string[] | null;
 }
+
+/**
+ * Provider webhook event types that must be subscribed before production
+ * traffic. Missing refund or dispute coverage means money could move at the
+ * provider with the platform never hearing about it.
+ */
+export const REQUIRED_WEBHOOK_EVENT_COVERAGE = [
+  "payment_intent.succeeded",
+  "payment_intent.payment_failed",
+  "refund.updated",
+  "charge.dispute.created",
+  "charge.dispute.closed",
+] as const;
 
 export type EnvironmentSource = Record<string, string | undefined>;
 
@@ -96,6 +120,106 @@ function isValidPostgresUrl(value: string | undefined) {
   }
 }
 
+type ErrorReporter = (id: string, message: string) => void;
+
+/**
+ * Stripe production gates.
+ *
+ * Two failure modes matter most and both are checked without ever reading a
+ * secret's value beyond its prefix: running live traffic against a test key,
+ * and running test mode in production at all. A webhook secret rotation window
+ * that never closes is also refused.
+ */
+function validateStripeConfiguration(env: EnvironmentSource, error: ErrorReporter) {
+  if (!env.STRIPE_SECRET_KEY) {
+    error("stripe_secret_missing", "STRIPE_SECRET_KEY is required when PAYMENT_PROVIDER=STRIPE.");
+  }
+  if (!env.STRIPE_WEBHOOK_SECRET_CURRENT) {
+    error(
+      "stripe_webhook_secret_missing",
+      "STRIPE_WEBHOOK_SECRET_CURRENT is required; without it no refund or dispute event can be verified.",
+    );
+  }
+  if (env.STRIPE_MODE !== "test" && env.STRIPE_MODE !== "live") {
+    error("stripe_mode_missing", "STRIPE_MODE must be explicitly 'test' or 'live'.");
+  }
+  if (env.STRIPE_MODE === "test") {
+    error(
+      "stripe_test_mode_in_production",
+      "STRIPE_MODE=test cannot serve production traffic; real customers would not be charged.",
+    );
+  }
+  const key = env.STRIPE_SECRET_KEY ?? "";
+  if (env.STRIPE_MODE === "live" && /^(sk|rk)_test_/.test(key)) {
+    error(
+      "stripe_live_mode_test_key",
+      "STRIPE_MODE=live but STRIPE_SECRET_KEY is a test key.",
+    );
+  }
+  if (env.STRIPE_MODE === "test" && /^(sk|rk)_live_/.test(key)) {
+    error(
+      "stripe_test_mode_live_key",
+      "STRIPE_MODE=test but STRIPE_SECRET_KEY is a live key.",
+    );
+  }
+  if (key && !/^(sk|rk)_(test|live)_/.test(key)) {
+    error("stripe_key_unrecognized", "STRIPE_SECRET_KEY is not a recognized Stripe secret key.");
+  }
+
+  if (env.STRIPE_WEBHOOK_SECRET_PREVIOUS) {
+    if (!env.STRIPE_WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT) {
+      error(
+        "stripe_rotation_window_open",
+        "STRIPE_WEBHOOK_SECRET_PREVIOUS is set without STRIPE_WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT, so the old secret would verify forever.",
+      );
+    }
+    if (env.STRIPE_WEBHOOK_SECRET_PREVIOUS === env.STRIPE_WEBHOOK_SECRET_CURRENT) {
+      error(
+        "stripe_rotation_duplicate",
+        "STRIPE_WEBHOOK_SECRET_PREVIOUS must differ from STRIPE_WEBHOOK_SECRET_CURRENT.",
+      );
+    }
+  }
+
+  // Refund and dispute coverage must be declared, or money can move at the
+  // provider without the platform ever hearing about it.
+  const declared = (env.STRIPE_WEBHOOK_EVENTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const missing = REQUIRED_WEBHOOK_EVENT_COVERAGE.filter((event) => !declared.includes(event));
+  if (missing.length > 0) {
+    error(
+      "webhook_coverage_incomplete",
+      `STRIPE_WEBHOOK_EVENTS is missing required event coverage: ${missing.join(", ")}.`,
+    );
+  }
+}
+
+/** Resend production gates, including the sender identity the domain requires. */
+function validateResendConfiguration(env: EnvironmentSource, error: ErrorReporter) {
+  if (!env.RESEND_API_KEY) {
+    error("resend_key_missing", "RESEND_API_KEY is required when NOTIFICATION_PROVIDER=RESEND.");
+  } else if (!env.RESEND_API_KEY.startsWith("re_")) {
+    error("resend_key_unrecognized", "RESEND_API_KEY is not a recognized Resend API key.");
+  }
+  if (!env.RESEND_FROM_ADDRESS) {
+    error(
+      "resend_sender_missing",
+      "RESEND_FROM_ADDRESS is required; a verified sender identity is mandatory for delivery.",
+    );
+  }
+  if (env.RESEND_MODE !== "test" && env.RESEND_MODE !== "live") {
+    error("resend_mode_missing", "RESEND_MODE must be explicitly 'test' or 'live'.");
+  }
+  if (env.RESEND_MODE === "test") {
+    error(
+      "resend_test_mode_in_production",
+      "RESEND_MODE=test redirects all mail to a test recipient; real customers would receive nothing.",
+    );
+  }
+}
+
 export function validateProductionConfiguration(input: {
   env: EnvironmentSource;
   probes?: ProductionCheckProbes;
@@ -117,20 +241,32 @@ export function validateProductionConfiguration(input: {
     );
   }
 
+  // The isolated-E2E override exists so browser verification can run against a
+  // production build. It has no place in a deployment serving real traffic, so
+  // its mere presence is a hard stop here regardless of whether the other
+  // isolation conditions happen to hold.
+  if (env.SEATFLOW_E2E_TEST_MODE) {
+    error(
+      "e2e_test_mode_enabled",
+      "SEATFLOW_E2E_TEST_MODE is set. That flag exists only for the isolated browser-test harness and must never be present in a production deployment.",
+    );
+  }
+
   // ---- Payment provider ---------------------------------------------------
   if (env.PAYMENT_PROVIDER === "LOCAL_SIGNED") {
     error(
       "payment_provider_local",
       "PAYMENT_PROVIDER is the development-only LOCAL_SIGNED adapter, which is forbidden in production.",
     );
+  } else if (env.PAYMENT_PROVIDER === "STRIPE") {
+    validateStripeConfiguration(env, error);
   } else if (env.PAYMENT_PROVIDER !== "EXTERNAL") {
-    error("payment_provider_missing", "PAYMENT_PROVIDER must be set to EXTERNAL.");
+    error("payment_provider_missing", "PAYMENT_PROVIDER must be set to STRIPE.");
   } else {
-    // EXTERNAL is a deliberate deployment gate: Phase 5C1 ships no reviewed
-    // external adapter, so this must remain a hard stop.
+    // EXTERNAL remains a hard stop: it names no reviewed adapter.
     error(
       "payment_provider_gate",
-      "PAYMENT_PROVIDER=EXTERNAL requires a reviewed external adapter and its credentials, which this build does not contain. Checkout must stay disabled.",
+      "PAYMENT_PROVIDER=EXTERNAL names no reviewed adapter. Select STRIPE and supply its credentials, or checkout must stay disabled.",
     );
   }
   if (env.LOCAL_PAYMENT_WEBHOOK_SECRET) {
@@ -146,12 +282,14 @@ export function validateProductionConfiguration(input: {
       "notification_provider_local",
       "NOTIFICATION_PROVIDER is the development-only LOCAL_FILE adapter, which is forbidden in production.",
     );
+  } else if (env.NOTIFICATION_PROVIDER === "RESEND") {
+    validateResendConfiguration(env, error);
   } else if (env.NOTIFICATION_PROVIDER !== "EXTERNAL") {
-    error("notification_provider_missing", "NOTIFICATION_PROVIDER must be set to EXTERNAL.");
+    error("notification_provider_missing", "NOTIFICATION_PROVIDER must be set to RESEND.");
   } else {
     error(
       "notification_provider_gate",
-      "NOTIFICATION_PROVIDER=EXTERNAL requires a reviewed external adapter and its credentials, which this build does not contain.",
+      "NOTIFICATION_PROVIDER=EXTERNAL names no reviewed adapter. Select RESEND and supply its credentials.",
     );
   }
   if (env.LOCAL_EMAIL_CAPTURE_DIR) {
@@ -329,6 +467,53 @@ export function validateProductionConfiguration(input: {
     error(
       "paid_unfulfilled_gate",
       `Paid-but-unfulfilled orders (${probes.paidUnfulfilled}) exceed DEPLOY_MAX_PAID_UNFULFILLED (${maxPaidUnfulfilled}).`,
+    );
+  }
+
+  // ---- Phase 5C2A financial gates ----------------------------------------
+  // Deploying on top of unreconciled money is how a small discrepancy becomes
+  // an unauditable one, so these are errors rather than warnings.
+  const maxRefundBacklog = Number(env.DEPLOY_MAX_REFUND_BACKLOG ?? "0");
+  const maxChargebacks = Number(env.DEPLOY_MAX_UNRESOLVED_CHARGEBACKS ?? "0");
+
+  // An unevaluated financial gate blocks. Treating a failed probe as a pass
+  // would mean the one time the check could not see the books is the one time
+  // it waves the deployment through.
+  if (probes.probeFailures && probes.probeFailures.length > 0) {
+    error(
+      "financial_probe_unavailable",
+      `Financial probes could not be evaluated (${probes.probeFailures.join(", ")}), so their gates cannot be trusted. Resolve the probe failure before deploying.`,
+    );
+  }
+
+  if (
+    typeof probes.refundReconciliationBacklog === "number" &&
+    probes.refundReconciliationBacklog > maxRefundBacklog
+  ) {
+    error(
+      "refund_backlog_gate",
+      `Refund reconciliation backlog (${probes.refundReconciliationBacklog}) exceeds DEPLOY_MAX_REFUND_BACKLOG (${maxRefundBacklog}).`,
+    );
+  }
+  if (
+    typeof probes.unresolvedChargebacks === "number" &&
+    probes.unresolvedChargebacks > maxChargebacks
+  ) {
+    error(
+      "chargeback_gate",
+      `Unresolved chargebacks and lost disputes (${probes.unresolvedChargebacks}) exceed DEPLOY_MAX_UNRESOLVED_CHARGEBACKS (${maxChargebacks}).`,
+    );
+  }
+  if (typeof probes.financialDivergences === "number" && probes.financialDivergences > 0) {
+    error(
+      "financial_divergence_gate",
+      `The append-only ledger disagrees with stored payment aggregates on ${probes.financialDivergences} payment(s). This must be investigated, never auto-corrected.`,
+    );
+  }
+  if (typeof probes.ticketRevocationBacklog === "number" && probes.ticketRevocationBacklog > 0) {
+    error(
+      "ticket_revocation_gate",
+      `${probes.ticketRevocationBacklog} refunded booking(s) still hold an active ticket, so refunded admission is still valid.`,
     );
   }
 

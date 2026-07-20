@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// Relative on purpose. This module is loaded by `prisma.config.ts` through the
+// Prisma CLI, which does not resolve the `@/` tsconfig alias, so an aliased
+// import here breaks every Prisma command.
+import { isIsolatedE2EMode } from "../features/operations/e2e-test-mode";
+
 type EnvironmentSource = Record<string, string | undefined>;
 
 const postgresUrlSchema = z
@@ -91,10 +96,28 @@ const inventoryEventEnvironmentSchema = z.object({
     .default(10),
 });
 
-const paymentEnvironmentSchema = z
+/**
+ * A Stripe key states its own mode in its prefix. Comparing that against the
+ * declared mode is what stops a deployment from believing it is in test mode
+ * while holding a live key, or the reverse. The value itself is never read
+ * beyond its prefix and is never reported.
+ */
+function stripeKeyMode(value: string | undefined): "test" | "live" | "unknown" {
+  if (!value) return "unknown";
+  if (/^(sk|rk)_test_/.test(value)) return "test";
+  if (/^(sk|rk)_live_/.test(value)) return "live";
+  return "unknown";
+}
+
+/**
+ * Built per call so the isolated-E2E decision can read the *whole* environment
+ * (database URL, origins, provider credentials), not just the payment fields
+ * this schema declares.
+ */
+const createPaymentEnvironmentSchema = (source: EnvironmentSource) => z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-    PAYMENT_PROVIDER: z.enum(["LOCAL_SIGNED", "EXTERNAL"]),
+    PAYMENT_PROVIDER: z.enum(["LOCAL_SIGNED", "EXTERNAL", "STRIPE"]),
     LOCAL_PAYMENT_WEBHOOK_SECRET: z.string().min(32).max(512).optional(),
     PAYMENT_WEBHOOK_MAX_BYTES: z.coerce
       .number()
@@ -102,6 +125,20 @@ const paymentEnvironmentSchema = z
       .min(1_024)
       .max(1_048_576)
       .default(65_536),
+
+    // ---- External Stripe adapter (disabled unless PAYMENT_PROVIDER=STRIPE) --
+    STRIPE_SECRET_KEY: z.string().min(20).max(200).optional(),
+    STRIPE_WEBHOOK_SECRET_CURRENT: z.string().min(32).max(512).optional(),
+    STRIPE_WEBHOOK_SECRET_PREVIOUS: z.string().min(32).max(512).optional(),
+    STRIPE_WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT: z.iso.datetime({ offset: true }).optional(),
+    /** Deliberately has no default: the mode must be stated, never inferred. */
+    STRIPE_MODE: z.enum(["test", "live"]).optional(),
+    STRIPE_ALLOWED_CURRENCIES: z
+      .string()
+      .max(200)
+      .regex(/^[A-Z]{3}(,[A-Z]{3})*$/, "must be a comma-separated list of ISO currency codes")
+      .optional(),
+    STRIPE_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
   })
   .superRefine((environment, context) => {
     if (
@@ -116,12 +153,77 @@ const paymentEnvironmentSchema = z
     }
     if (
       environment.NODE_ENV === "production" &&
-      environment.PAYMENT_PROVIDER === "LOCAL_SIGNED"
+      environment.PAYMENT_PROVIDER === "LOCAL_SIGNED" &&
+      // The single, audited exception: a demonstrably isolated E2E harness.
+      // Browser verification must run against a production build, which sets
+      // NODE_ENV=production; every condition in `evaluateIsolatedE2EMode` has
+      // to hold for the simulated provider to be permitted there. A real
+      // production deployment fails those conditions, so this rule still
+      // forbids LOCAL_SIGNED for it.
+      !isIsolatedE2EMode(source)
     ) {
       context.addIssue({
         code: "custom",
         path: ["PAYMENT_PROVIDER"],
         message: "LOCAL_SIGNED is forbidden in production",
+      });
+    }
+
+    if (environment.PAYMENT_PROVIDER !== "STRIPE") {
+      // The external adapter stays off unless it is explicitly selected, so a
+      // stray credential in the environment cannot quietly enable it.
+      return;
+    }
+
+    for (const name of [
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET_CURRENT",
+      "STRIPE_MODE",
+    ] as const) {
+      if (!environment[name]) {
+        context.addIssue({
+          code: "custom",
+          path: [name],
+          message: "is required when PAYMENT_PROVIDER is STRIPE",
+        });
+      }
+    }
+
+    const keyMode = stripeKeyMode(environment.STRIPE_SECRET_KEY);
+    if (environment.STRIPE_SECRET_KEY && keyMode === "unknown") {
+      context.addIssue({
+        code: "custom",
+        path: ["STRIPE_SECRET_KEY"],
+        message: "is not a recognized Stripe secret key",
+      });
+    }
+    if (environment.STRIPE_MODE && keyMode !== "unknown" && keyMode !== environment.STRIPE_MODE) {
+      context.addIssue({
+        code: "custom",
+        path: ["STRIPE_SECRET_KEY"],
+        message: `does not match STRIPE_MODE=${environment.STRIPE_MODE}`,
+      });
+    }
+
+    if (
+      environment.STRIPE_WEBHOOK_SECRET_PREVIOUS &&
+      !environment.STRIPE_WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["STRIPE_WEBHOOK_SECRET_PREVIOUS_EXPIRES_AT"],
+        message:
+          "is required whenever a previous webhook secret is set, so the rotation window closes",
+      });
+    }
+    if (
+      environment.STRIPE_WEBHOOK_SECRET_PREVIOUS &&
+      environment.STRIPE_WEBHOOK_SECRET_PREVIOUS === environment.STRIPE_WEBHOOK_SECRET_CURRENT
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["STRIPE_WEBHOOK_SECRET_PREVIOUS"],
+        message: "must differ from STRIPE_WEBHOOK_SECRET_CURRENT",
       });
     }
   });
@@ -142,7 +244,20 @@ const ticketEnvironmentSchema = z.object({
 const notificationEnvironmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-    NOTIFICATION_PROVIDER: z.enum(["LOCAL_FILE", "EXTERNAL"]),
+    NOTIFICATION_PROVIDER: z.enum(["LOCAL_FILE", "EXTERNAL", "RESEND"]),
+
+    // ---- External Resend adapter (disabled unless NOTIFICATION_PROVIDER=RESEND)
+    RESEND_API_KEY: z.string().min(20).max(200).optional(),
+    RESEND_FROM_ADDRESS: z.email().max(254).optional(),
+    RESEND_REPLY_TO_ADDRESS: z.email().max(254).optional(),
+    /** Deliberately has no default: the mode must be stated, never inferred. */
+    RESEND_MODE: z.enum(["test", "live"]).optional(),
+    /**
+     * In test mode every message is redirected here instead of the customer, so
+     * a misconfigured non-production deployment cannot email a real customer.
+     */
+    RESEND_TEST_RECIPIENT: z.email().max(254).optional(),
+    RESEND_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(15_000),
     LOCAL_EMAIL_CAPTURE_DIR: z
       .string()
       .min(1)
@@ -168,6 +283,33 @@ const notificationEnvironmentSchema = z
         code: "custom",
         path: ["NOTIFICATION_PROVIDER"],
         message: "LOCAL_FILE is forbidden in production",
+      });
+    }
+
+    if (environment.NOTIFICATION_PROVIDER !== "RESEND") return;
+
+    for (const name of ["RESEND_API_KEY", "RESEND_FROM_ADDRESS", "RESEND_MODE"] as const) {
+      if (!environment[name]) {
+        context.addIssue({
+          code: "custom",
+          path: [name],
+          message: "is required when NOTIFICATION_PROVIDER is RESEND",
+        });
+      }
+    }
+    if (environment.RESEND_API_KEY && !environment.RESEND_API_KEY.startsWith("re_")) {
+      context.addIssue({
+        code: "custom",
+        path: ["RESEND_API_KEY"],
+        message: "is not a recognized Resend API key",
+      });
+    }
+    // Test mode without a redirect address would send to real recipients.
+    if (environment.RESEND_MODE === "test" && !environment.RESEND_TEST_RECIPIENT) {
+      context.addIssue({
+        code: "custom",
+        path: ["RESEND_TEST_RECIPIENT"],
+        message: "is required in test mode so no message can reach a real customer",
       });
     }
   });
@@ -223,6 +365,14 @@ const operationsEnvironmentSchema = z
     DEPLOY_MAX_DEAD_LETTERS: z.coerce.number().int().min(0).max(1_000_000).default(0),
     DEPLOY_MAX_PAID_UNFULFILLED: z.coerce.number().int().min(0).max(1_000_000).default(0),
 
+    // Phase 5C2A financial gates. A refund still moving normally is not
+    // backlog; one unsettled past this window is.
+    DEPLOY_MAX_REFUND_BACKLOG: z.coerce.number().int().min(0).max(1_000_000).default(0),
+    DEPLOY_MAX_UNRESOLVED_CHARGEBACKS: z.coerce.number().int().min(0).max(1_000_000).default(0),
+    REFUND_BACKLOG_STALE_SECONDS: z.coerce.number().int().min(60).max(86_400).default(900),
+    /** Caps the divergence scan so a preflight cannot itself become an outage. */
+    FINANCIAL_DIVERGENCE_SCAN_LIMIT: z.coerce.number().int().min(50).max(10_000).default(500),
+
     // Security headers
     SECURITY_HEADERS_ENABLED: booleanFlagSchema.default(true),
     SECURITY_HSTS_MAX_AGE_SECONDS: z.coerce
@@ -273,7 +423,7 @@ export type ApplicationEnvironment = z.infer<
 export type InventoryEventEnvironment = z.infer<
   typeof inventoryEventEnvironmentSchema
 >;
-export type PaymentEnvironment = z.infer<typeof paymentEnvironmentSchema>;
+export type PaymentEnvironment = z.infer<ReturnType<typeof createPaymentEnvironmentSchema>>;
 export type TicketEnvironment = z.infer<typeof ticketEnvironmentSchema>;
 export type NotificationEnvironment = z.infer<typeof notificationEnvironmentSchema>;
 
@@ -380,7 +530,7 @@ export function readOptionalInventoryEventEnvironment(
 export function readPaymentEnvironment(
   source: EnvironmentSource = process.env,
 ): PaymentEnvironment {
-  const result = paymentEnvironmentSchema.safeParse(source);
+  const result = createPaymentEnvironmentSchema(source).safeParse(source);
   if (!result.success) {
     throw formatEnvironmentError("SeatFlow payment provider", result.error);
   }
