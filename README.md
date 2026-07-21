@@ -1,8 +1,173 @@
 # SeatFlow
 
-SeatFlow is a production-oriented event-ticketing portfolio project. The repository now contains **Phase 5B: secure ticket issuance, delivery, and authoritative entry validation**, built on exact-once payment and booking fulfillment.
+SeatFlow is a production-oriented event-ticketing platform: multi-tenant venue and
+event management, a live seat map, atomic seat holds, exact-once booking
+fulfilment, secure digital tickets with entry scanning, and a complete refund,
+dispute, ledger, and reconciliation layer.
 
-Every authenticated user remains a customer. Platform privilege is deliberately narrow (`USER` or `ADMIN`); organizer and venue-operator capability comes from organization memberships (`OWNER`, `ADMIN`, or `MEMBER`).
+It is built as a portfolio project, but it is not a toy. Seat authority lives in
+PostgreSQL, money state changes only on a verified webhook, the financial ledger
+is append-only and enforced by database triggers, and every relaxation granted to
+a non-production environment has to *prove* it is not production.
+
+**Live staging demo → <https://seatflow-staging.vercel.app>**
+
+## ⚠️ Demo environment disclaimer
+
+The live URL above is a **staging demo**, and every page says so in a
+non-dismissible banner.
+
+- **No real payment is possible.** Checkout uses the simulated `LOCAL_SIGNED`
+  provider. No card is accepted, no money moves, and **no payment network is
+  ever contacted**. There is no payment account of any kind attached to this
+  project.
+- **Email goes to exactly one approved test recipient.** Resend runs in test
+  mode, so every message is redirected regardless of the intended address.
+- **All data is synthetic** and may be removed at any time.
+- Demo account passwords are **not** published here. They live only in an
+  ignored local file chosen by the environment's owner.
+
+## Architecture
+
+Next.js App Router (React Server Components) with Server Actions for mutations,
+Prisma over PostgreSQL as the single source of truth, and Redis used strictly as
+an invalidation transport — never as seat, payment, or entry authority.
+
+```text
+Browser ── RSC / Server Actions ── PostgreSQL (authority)
+                 │                      ▲
+                 │                      │ triggers enforce ledger + refund caps
+                 ├── Redis Streams ─────┘ (invalidation transport only)
+                 ├── Payment provider boundary ── verified webhook ── money state
+                 └── Outbox tables ── scheduled jobs (BullMQ workers *or* QStash)
+```
+
+Four deployment profiles are recognised and are **not** interchangeable:
+`local`, `isolated-e2e`, `staging-demo`, and `production`. A profile that is
+merely *claimed* but fails any of its conditions resolves to `production` — the
+strictest world — so a misconfiguration fails closed.
+
+### Technology stack
+
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 16 (App Router, RSC, Server Actions, Turbopack) |
+| Language | TypeScript, strict |
+| Database | PostgreSQL via Prisma 7 (Neon on staging) |
+| Auth | Better Auth (email/password sessions) |
+| Cache / transport | Redis 7 (Upstash on staging) |
+| Scheduling | BullMQ workers, or Upstash QStash signed HTTP jobs |
+| Email | Resend (test mode on staging), local file capture in development |
+| Hosting | Vercel |
+| Testing | Vitest (unit, component, server, integration), Playwright (browser) |
+
+## Roles
+
+Every authenticated user is a customer. Platform privilege is deliberately narrow
+(`USER` or `ADMIN`); organizer and venue-operator capability comes from
+organization memberships (`OWNER`, `ADMIN`, `MEMBER`) — never from a global flag.
+
+| Role | Capability |
+|---|---|
+| Customer | Discovery, seat selection and holds, checkout, bookings, tickets, refund requests |
+| Organizer | Events, sessions, pricing, aggregate inventory, entry scanning, tenant financials |
+| Venue operator | Venues, spaces, versioned seat maps, organizer access grants |
+| Platform admin | Financial queues and operational health — and **no** adjustment control |
+
+## Key capabilities
+
+### Seat inventory and atomic holds
+
+Per-session inventory is materialised from the exact immutable published seat
+map. Holds are **all-or-nothing** with a ten-minute default TTL, acquired under
+PostgreSQL row locks with conditional claims, bounded deadlock/serialization
+retries, and idempotent acquisition. Expiry is handled by lazy reclamation plus a
+bounded sweeper. Redis messages only signal that inventory changed; the client
+always reloads the authoritative PostgreSQL snapshot, and PostgreSQL confirms
+availability again when the hold is created.
+
+### Simulated payment and exact-once booking
+
+Checkout totals are server-owned, copied from immutable hold and inventory
+snapshots. The payment-provider boundary keeps the simulated and external
+adapters interchangeable. Webhooks are verified by raw-body HMAC **before**
+parsing or persistence, then deduplicated by provider event id with
+amount/currency checks and first-terminal-state protection. Fulfilment is
+exact-once: the hold converts, inventory is permanently marked `BOOKED`, and
+booking plus outbox records commit atomically. A browser redirect can never
+authorise a booking.
+
+### Ticketing and scanning
+
+One ticket per booked seat, retry-safe, with immutable ancestry and **hash-only**
+credential persistence. QR credentials are versioned and HMAC-derived, support
+rotation and terminal revocation, and redeem atomically on first use with
+append-only scan history. Organizer scanning is mobile-first with camera and
+manual fallback, strict tenant authorization, and honest online-only validation.
+
+### Refunds, disputes, ledger, and reconciliation
+
+- Refunds never rewrite the original payment; they add independently auditable state.
+- Over-refunding is prevented **by PostgreSQL** — trigger-maintained aggregates
+  whose row lock serialises concurrent refunds, plus a CHECK constraint.
+- Only a verified provider webhook settles money.
+- The ledger is append-only; a trigger rejects every UPDATE and DELETE.
+- Refunds never reopen inventory — a refunded seat stays `BOOKED`.
+- Used tickets stay used; a scan is never rewritten by a refund or lost dispute.
+- Financial probes fail closed rather than reporting a comforting zero.
+
+### QStash serverless jobs
+
+`SEATFLOW_JOB_MODE=serverless` switches scheduling from resident BullMQ workers
+to signed QStash HTTP deliveries against the *same* bounded, idempotent
+operations. `worker` remains the default and the production-grade path. Seven
+schedules run on staging: inventory outbox dispatch and hold expiry (every 2
+min), ticket issuance and notification dispatch (every 5 min), and refund,
+stale-webhook, and ticket-revocation reconciliation (hourly). Every internal job
+endpoint requires a valid QStash signature — unsigned and bogus-signed requests
+are rejected with 401, and an unknown job name with 400. Delivery receipts and
+worker heartbeats are recorded in PostgreSQL, so a scheduler that silently stops
+is visible in readiness.
+
+## Security controls
+
+- Raw-body HMAC webhook verification in constant time, before parsing
+- Provider-event deduplication and first-terminal-state protection
+- Signed QStash job delivery; unsigned requests rejected
+- Better Auth sessions; no client-supplied role, price, amount, or actor id is trusted
+- Server-side pricing — injected financial fields in a request are ignored
+- Append-only ledger and append-only scan history enforced by database triggers
+- Rate limiting with an honest `process_local_only` readiness warning when distributed limiting is unavailable
+- Tenant isolation verified by browser tests, including URL-manipulation attempts
+- Secrets never printed by any command; staging tooling reports variable **names** and status only
+- Deployment gates that fail closed, and a production check that rejects the E2E flag outright
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Homepage](docs/assets/screenshots/homepage.png) | ![Event discovery](docs/assets/screenshots/events-discovery.png) |
+| **Homepage** — public programme, demo banner | **Discovery** — search, category, city, sort |
+| ![Event and session](docs/assets/screenshots/event-session.png) | ![Seat selection](docs/assets/screenshots/seat-selection.png) |
+| **Event** — session, venue, representative pricing | **Seat selection** — live map, PostgreSQL authority |
+
+## Test totals
+
+Verified on the current commit:
+
+| Suite | Tests |
+|---|---|
+| Unit and component (`npm test`) | 452 |
+| PostgreSQL integration, serial (`npm run test:integration`) | 166 |
+| Browser E2E, desktop + mobile (`npm run test:browser`) | 61 |
+| Server (`npm run test:server`) | 29 |
+| Provider (`npm run test:provider`) | 8 |
+| Notification (`npm run test:notification`) | 8 |
+| PDF (`npm run test:pdf`) | 4 |
+| **Total** | **728** |
+
+`npm run test:redis` additionally covers the Redis transport and requires a
+disposable Redis endpoint.
 
 ## What is implemented
 
@@ -48,7 +213,11 @@ Every authenticated user remains a customer. Platform privilege is deliberately 
 - Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
 - Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Phase 5B does **not** process refunds, chargebacks/disputes, coupons, waitlists, dynamic pricing, taxes/fees, split tender, raw card data, or sales analytics. The checked-in payment and notification providers are deterministic local development/test adapters and are rejected in production; reviewed external adapters remain deployment gates. Client redirects and Redis messages never authorize payment, ticket issuance, or entry.
+Refunds, disputes/chargebacks, the append-only financial ledger, and reconciliation
+are implemented (Phase 5C2A). SeatFlow still does **not** handle coupons,
+waitlists, dynamic pricing, taxes/fees, split tender, raw card data, or sales
+analytics. Raw card data is out of scope by design and is never accepted. Client
+redirects and Redis messages never authorize payment, ticket issuance, or entry.
 
 ## Main routes
 
@@ -238,12 +407,13 @@ built on the official SDKs and are constructed only when explicitly selected
 a live payment network or start sending real email. `STRIPE_MODE` and
 `RESEND_MODE` have no default — the mode must be stated, never inferred.
 
-> **Verification status.** The Stripe and Resend adapters compile and are
-> type-checked, but have **not** been verified against real sandbox
-> credentials, which are absent from this environment. External sandbox suites
-> are reported as *SKIPPED — credentials absent*. **No real-money charge and no
-> real customer email has occurred.** Sandbox, staging, and launch are Phase
-> 5C2B. See [docs/phase-5c2a-external-providers.md](docs/phase-5c2a-external-providers.md).
+> **Verification status.** The **Resend** adapter is verified live: the staging
+> deployment sends real email through it, in test mode, to one approved
+> recipient. The **Stripe** adapter compiles and is type-checked but has **not**
+> been exercised against sandbox credentials, which are absent from this
+> project; its sandbox suites report *SKIPPED — credentials absent*. **No
+> real-money charge has ever occurred, and no payment network has ever been
+> contacted.** See [docs/phase-5c2a-external-providers.md](docs/phase-5c2a-external-providers.md).
 
 ### Financial guarantees
 
@@ -298,11 +468,46 @@ switches scheduling from resident BullMQ workers to signed QStash deliveries
 against the *same* bounded, idempotent operations; `worker` remains the default
 and the production-grade path.
 
+### Staging architecture
+
+| Service | Role on staging |
+|---|---|
+| **Vercel** | Hosts the production build; Production and Preview each hold the same 28 approved variable names, stored encrypted |
+| **Neon** | PostgreSQL authority; migrations applied with `migrate deploy` only — `reset` is unreachable by construction |
+| **Upstash Redis** | Invalidation transport and distributed rate limiting over the REST API |
+| **Upstash QStash** | Seven signed HTTP job schedules replacing resident workers |
+| **Resend** | Email in test mode; every message redirected to one approved recipient |
+
+Vercel builds with `NODE_ENV=production`, so the staging demo must *prove* it is
+not production before it may run the simulated provider:
+`evaluateStagingDemoMode` requires the declared profile, a production build,
+https staging origins for **both** the auth and browser-visible URLs,
+`PAYMENT_PROVIDER=LOCAL_SIGNED`, a sufficiently long local webhook secret, the
+**absence** of any Stripe credential, no live provider mode, and no
+real-production launch marker. Failing any single condition resolves the profile
+to `production`, which refuses the simulated provider outright.
+
+### Environment setup
+
+Copy the template and fill in your own values — the example files contain
+placeholders only, and no real value is ever committed:
+
 ```bash
 cp .env.staging.example .env.staging.local   # then fill in your own values
 npm run staging:secrets -- check             # validate; names only, never values
 npm run staging:migrate -- status            # read-only against Neon
 ```
+
+`.env`, `.env.local`, `.env.staging.local`, and `.vercel/` are gitignored.
+Secret **values** never appear in command output, logs, error messages, or the
+process argument list — the import path passes each value over stdin and stores
+it as sensitive.
+
+### Deployment model
+
+Deployments are made explicitly from the CLI (`npx vercel --prod`). There is
+**no** Vercel Git integration, so no push can deploy on its own; the repository
+and the running deployment advance only by deliberate action.
 
 Every outward-facing command requires an explicit typed confirmation, and none
 prints a secret value.
@@ -331,3 +536,22 @@ Runs against a production build (the dev server injects a hot-reload socket and
 a dev-tools portal that make "no console errors" unverifiable) and against the
 disposable test database — never the development one. Sessions are obtained by
 signing in through the real login form; nothing forges a session.
+
+## Known staging limitations
+
+These are properties of the free staging demo, not defects:
+
+- **No real payments, ever.** The simulated provider is the only one configured,
+  and no payment network is contacted. Stripe remains unexercised.
+- **Email reaches one approved recipient only**, because Resend runs in test mode.
+- **No resident worker processes.** Serverless jobs run on QStash schedules, so
+  work is picked up on a 2-minute to 1-hour cadence rather than continuously.
+- **No realtime socket.** Serverless has no gateway process, so the seat map
+  falls back to polling. This is expected and is not reported as a fault.
+- **Readiness reports `degraded`, not `ready`.** Distributed rate limiting and
+  the absent realtime gateway are warnings by design; a signal that is always
+  yellow is one nobody reads, so warnings never remove the instance from
+  rotation.
+- **Free-tier resources.** Neon and Upstash free tiers may cold-start, so the
+  first request after an idle period can be slow.
+- **Demo data is disposable** and may be reset or removed at any time.
