@@ -1,0 +1,78 @@
+name: Browser E2E
+
+# Deliberately not run on every push to master.
+#
+# The suite builds the application and boots a production server before the
+# first assertion, so it costs minutes rather than seconds. It runs where that
+# cost buys something: on a pull request, and on demand. The fast signal
+# (lint, types, unit, integration, build) is the CI workflow and does gate
+# every push.
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Playwright browser verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Ephemeral service container only. `evaluateIsolatedE2EMode` additionally
+      # requires the test-marked database, loopback origins, and the *absence*
+      # of any real provider credential — none of which is present here — before
+      # the simulated payment provider may run under a production build.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow_test
+      BETTER_AUTH_SECRET: ci-only-better-auth-secret-with-at-least-32-characters
+      BETTER_AUTH_URL: http://127.0.0.1:3000
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      TICKET_CREDENTIAL_SECRET: ci-only-ticket-credential-secret-at-least-32-chars
+      PAYMENT_PROVIDER: LOCAL_SIGNED
+      LOCAL_PAYMENT_WEBHOOK_SECRET: ci-only-local-payment-webhook-secret-32-chars-min
+      NOTIFICATION_PROVIDER: LOCAL_FILE
+      LOCAL_EMAIL_CAPTURE_DIR: tmp/ci-email-capture
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d seatflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create dedicated test database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d seatflow -c 'CREATE DATABASE seatflow_test;'
+
+      - name: Apply migrations to the test database
+        run: npm run db:test:migrate
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser verification
+        run: npm run test:browser

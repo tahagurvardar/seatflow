@@ -1,24 +1,93 @@
 name: CI
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Every value below is a throwaway CI literal for an ephemeral service container.
+# None is a secret, and CI never points at a hosted database. The staging and
+# production environments are configured entirely outside this repository.
+env:
+  BETTER_AUTH_SECRET: ci-only-better-auth-secret-with-at-least-32-characters
+  BETTER_AUTH_URL: http://localhost:3000
+  NEXT_PUBLIC_APP_URL: http://localhost:3000
+  NEXT_PUBLIC_REALTIME_URL: http://localhost:3001
+  TICKET_CREDENTIAL_SECRET: ci-only-ticket-credential-secret-at-least-32-chars
+  PAYMENT_PROVIDER: LOCAL_SIGNED
+  LOCAL_PAYMENT_WEBHOOK_SECRET: ci-only-local-payment-webhook-secret-32-chars-min
+  NOTIFICATION_PROVIDER: LOCAL_FILE
+  LOCAL_EMAIL_CAPTURE_DIR: tmp/ci-email-capture
+
 jobs:
   quality:
+    name: Lint, types, unit tests, build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      # Parseable placeholders only. Nothing in this job opens a connection.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/seatflow
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow_test
-      BETTER_AUTH_SECRET: ci-only-better-auth-secret-with-at-least-32-characters
-      BETTER_AUTH_URL: http://localhost:3000
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Server tests
+        run: npm run test:server
+
+      - name: Provider tests
+        run: npm run test:provider
+
+      - name: Notification tests
+        run: npm run test:notification
+
+      - name: PDF tests
+        run: npm run test:pdf
+
+      - name: Production build
+        run: npm run build
+
+  integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Ephemeral service container, destroyed with the runner. `seatflow_test`
+      # is the disposable target the guarded harness requires: it is test-marked
+      # and is not equal to DATABASE_URL, so `readSafeTestDatabaseUrl` accepts it.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow_test
     services:
       postgres:
         image: postgres:17-alpine
@@ -51,20 +120,60 @@ jobs:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d seatflow -c 'CREATE DATABASE seatflow_test;'
 
-      - name: Apply application migrations
-        run: npm run db:migrate:deploy
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Unit tests
-        run: npm test
-
       - name: PostgreSQL integration tests
         run: npm run test:integration
 
-      - name: Production build
-        run: npm run build
+  redis:
+    name: Redis transport tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/seatflow
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/seatflow_test
+      REDIS_URL: redis://localhost:6379
+      REDIS_STREAM_PREFIX: seatflow:ci
+      REDIS_WORKER_ID: ci-runner
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seatflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d seatflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create dedicated test database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d seatflow -c 'CREATE DATABASE seatflow_test;'
+
+      - name: Redis transport tests
+        run: npm run test:redis

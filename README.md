@@ -1,5 +1,12 @@
 # SeatFlow
 
+[![CI](https://github.com/tahagurvardar/seatflow/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tahagurvardar/seatflow/actions/workflows/ci.yml)
+[![Live demo](https://img.shields.io/badge/live%20demo-seatflow--staging-000000?logo=vercel&logoColor=white)](https://seatflow-staging.vercel.app)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 SeatFlow is a production-oriented event-ticketing platform: multi-tenant venue and
 event management, a live seat map, atomic seat holds, exact-once booking
 fulfilment, secure digital tickets with entry scanning, and a complete refund,
@@ -196,7 +203,7 @@ disposable Redis endpoint.
 - Customer selection reconciliation plus aggregate-only organizer inventory refresh
 - Protected operational health for Redis, outbox, dispatcher, expiry lag, conflicts, retries, and realtime clients
 - Server-owned checkout totals copied from immutable hold/inventory snapshots, with bounded expiry and retry-safe idempotency
-- A payment-provider boundary plus deterministic signed development/test provider that is impossible to enable in production
+- A payment-provider boundary plus a deterministic signed simulator that is impossible to enable in the real-production deployment profile
 - Raw-body HMAC webhook verification, provider-event deduplication, amount/currency checks, and first-terminal-state protection
 - Exact-once booking fulfillment that converts the hold, permanently marks inventory `BOOKED`, and writes booking/outbox records atomically
 - Customer checkout status and booking history/detail pages plus organizer aggregate booking summaries
@@ -213,11 +220,12 @@ disposable Redis endpoint.
 - Real organizer and venue-operator dashboard counts without invented booking, sales, or revenue data
 - Guarded development/test database workflows and unit, component, and PostgreSQL integration tests
 
-Refunds, disputes/chargebacks, the append-only financial ledger, and reconciliation
-are implemented (Phase 5C2A). SeatFlow still does **not** handle coupons,
-waitlists, dynamic pricing, taxes/fees, split tender, raw card data, or sales
-analytics. Raw card data is out of scope by design and is never accepted. Client
-redirects and Redis messages never authorize payment, ticket issuance, or entry.
+### Out of scope
+
+SeatFlow does **not** handle coupons, waitlists, dynamic pricing, taxes/fees,
+split tender, or sales analytics. Raw card data is out of scope by design and is
+never accepted. Client redirects and Redis messages never authorize payment,
+ticket issuance, or entry.
 
 ## Main routes
 
@@ -233,7 +241,7 @@ redirects and Redis messages never authorize payment, ticket issuance, or entry.
 | `/customer/tickets` | Authenticated customer's issued tickets |
 | `/customer/tickets/[ticketReference]` | Owner-only ticket detail with protected QR and PDF action |
 | `/events/[slug]/sessions/[sessionId]/seats` | Public availability preview; authenticated customers can select and hold seats |
-| `/organizer/dashboard` | Organizer tenant selection and real Phase 3 counts |
+| `/organizer/dashboard` | Organizer tenant selection and real event and session counts |
 | `/organizer/organizations/[organizationSlug]/events` | Organizer event list and management entry point |
 | `.../events/new`, `.../events/[eventSlug]/edit` | Authorized draft event creation/editing |
 | `.../events/[eventSlug]/sessions/new` | Session creation from approved venues and published maps |
@@ -242,7 +250,7 @@ redirects and Redis messages never authorize payment, ticket issuance, or entry.
 | `.../sessions/[sessionId]/pricing` | Draft tier and section-pricing configuration |
 | `.../events/[eventSlug]/preview` | Organizer publication preview |
 | `/organizer/organizations/[organizationSlug]/venues` | Approved venue/space/published-map information |
-| `/venue-operator/dashboard` | Operator tenant selection and Phase 3 grant/session counts |
+| `/venue-operator/dashboard` | Operator tenant selection and grant/session counts |
 | `/venue-operator/organizations/[organizationSlug]/venues` | Tenant-scoped venue management |
 | `.../venues/[venueSlug]/access` | Grant and revoke organizer venue access |
 | `.../spaces/[spaceSlug]/seat-maps/[version]` | Draft editor or immutable map preview |
@@ -250,9 +258,9 @@ redirects and Redis messages never authorize payment, ticket issuance, or entry.
 | `/api/auth/[...all]` | Better Auth handler |
 | `/api/inventory/sessions/[sessionId]` | No-store authoritative customer snapshot plus a short-lived signed room ticket |
 | `/api/inventory/sessions/[sessionId]/organizer` | Membership-protected aggregate inventory snapshot |
-| `/api/operations/inventory/health` | Platform-admin-only non-sensitive Phase 4B health and metrics |
+| `/api/operations/inventory/health` | Platform-admin-only non-sensitive inventory health and metrics |
 | `/api/payments/webhooks/[provider]` | Raw-body provider webhook ingress with signature verification before parsing/persistence |
-| `/api/operations/payments/health` | Platform-admin-only non-sensitive Phase 5A health counts |
+| `/api/operations/payments/health` | Platform-admin-only non-sensitive payment health counts |
 | `/api/tickets/[ticketReference]/qr` | Owner-only, no-store SVG credential QR |
 | `/api/tickets/download/[token]` | Authenticated, owner-bound, single-use booking PDF download |
 | `/api/tickets/validate` | Authenticated, rate-limited, tenant-authorized entry validation |
@@ -316,13 +324,17 @@ npm run build
 
 `npm run test:integration` validates `TEST_DATABASE_URL`, refuses a shared or ambiguously named database, resets only that target, applies all committed migrations, and runs the serial PostgreSQL suite.
 
-`npm run holds:backfill` additively materializes inventory for eligible sessions published before Phase 4A. It never resets data or invents pricing and refuses partial inconsistent inventory. `npm run holds:sweep -- --batch-size 100 --max-batches 10` expires overdue active holds in bounded, concurrency-safe batches. See the Phase 4A operations guide before running either command outside local development.
+Every operational command is bounded, safe to repeat, and incapable of granting
+payment success, settling a refund, or printing a credential. Read the matching
+runbook before running one outside local development:
 
-`npm run inventory:dispatch` processes one bounded outbox batch; `npm run inventory:dispatcher` runs continuously. `npm run holds:schedule` idempotently registers the BullMQ repeat schedule, `npm run holds:worker` consumes it, and `npm run realtime:gateway` serves signed session rooms. The manual expiry command remains supported. See the [Phase 4B operations guide](docs/phase-4b-operations.md) for rollout, health, Redis outage, and production process requirements.
-
-`npm run payments:reconcile -- --limit=100` initializes or refreshes pending provider intents but deliberately cannot grant payment success. `npm run payments:webhook:reprocess` accepts only an internally stored, verified webhook ID. Use `npm run payments:report` for paid-unfulfilled/stale queues and `npm run checkouts:expire -- --batch-size=100 --max-batches=10` for bounded unpaid expiry. See the [Phase 5A operations guide](docs/phase-5a-operations.md) before deployment or incident recovery.
-
-`npm run tickets:issue` processes one bounded issuance batch and is safe to repeat. `npm run notifications:dispatch` processes one bounded notification batch; `npm run notifications:retry` makes eligible pending failures immediately due. Management commands re-authorize the supplied actor and never print a credential. Use `npm run tickets:report` and the protected health route for backlogs. See the [Phase 5B operations guide](docs/phase-5b-operations.md) before rollout, secret rotation, or incident recovery.
+| Area | Runbook |
+|---|---|
+| Inventory backfill and hold expiry | [Inventory and holds](docs/phase-4a-operations.md) |
+| Outbox dispatch, workers, realtime gateway | [Realtime inventory](docs/phase-4b-operations.md) |
+| Payment reconciliation, webhook replay, checkout expiry | [Payments and bookings](docs/phase-5a-operations.md) |
+| Ticket issuance, notifications, credential rotation | [Ticketing and delivery](docs/phase-5b-operations.md) |
+| Refunds, disputes, ledger, reconciliation | [Refunds and disputes](docs/refunds-and-disputes.md) |
 
 ## Administrator bootstrap
 
@@ -347,16 +359,18 @@ tests/integration/            Dedicated PostgreSQL integration tests
 docs/                         Product, architecture, security, operations, roadmap
 ```
 
-See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [Phase 4A operations](docs/phase-4a-operations.md), [Phase 4B operations](docs/phase-4b-operations.md), [Phase 5A operations](docs/phase-5a-operations.md), [Phase 5B operations](docs/phase-5b-operations.md), [security](docs/security.md), and [roadmap](docs/roadmap.md).
+See [product requirements](docs/product-requirements.md), [architecture](docs/architecture.md), [security](docs/security.md), [contributing](CONTRIBUTING.md), and the [roadmap](docs/roadmap.md). Operational runbooks are listed in the table above; `docs/` retains the full phase-by-phase delivery history.
 
-## Phase 5C1 — production readiness
+## Production readiness
 
-Phase 5C1 adds observability, abuse controls, health separation, backup
-verification, load and outage testing, and a deployment gate.
+Observability, abuse controls, health separation, backup verification, load and
+outage testing, and a deployment gate.
 
-**Production traffic is not enabled.** `npm run production:check` fails by
-design until Phase 5C2 delivers reviewed external payment and notification
-adapters.
+**SeatFlow's public deployment is an explicitly identified staging demo. Real
+commercial production traffic and real payment processing remain disabled.**
+`npm run production:check` is the read-only gate that enforces this: it refuses a
+real-production launch without a reviewed external payment and notification
+adapter, and it rejects the isolated-E2E flag outright.
 
 ### Commands
 
@@ -396,10 +410,7 @@ PostgreSQL and Redis run from durable local paths rather than `%TEMP%`, which a
 Windows cleanup can delete. Start them before running the database-backed
 suites; `PG_BIN_DIR` points the backup tooling at the PostgreSQL binaries.
 
-## Phase 5C2A — refunds, disputes, and the financial ledger
-
-Refunds, disputes, chargebacks, an append-only financial ledger, external
-provider adapters, and the customer/organizer/admin financial interfaces.
+## External providers and financial operations
 
 **External providers are disabled by default.** Stripe and Resend adapters are
 built on the official SDKs and are constructed only when explicitly selected
@@ -415,22 +426,10 @@ a live payment network or start sending real email. `STRIPE_MODE` and
 > real-money charge has ever occurred, and no payment network has ever been
 > contacted.** See [docs/phase-5c2a-external-providers.md](docs/phase-5c2a-external-providers.md).
 
-### Financial guarantees
-
-- **Refunds never rewrite the original payment.** What the customer paid stays
-  recorded; a refund adds new, independently auditable state.
-- **Over-refunding is prevented by PostgreSQL**, via trigger-maintained
-  aggregates whose row lock serializes concurrent refunds, plus a CHECK
-  constraint. Sixteen simultaneous requests stay within the captured amount.
-- **Only a verified provider webhook settles money.** Not a browser redirect,
-  not a client response, not an organizer, not Redis.
-- **The ledger is append-only.** A trigger rejects every UPDATE and DELETE.
-- **Refunds never reopen inventory.** A refunded seat stays `BOOKED`; resale is
-  a future controlled phase.
-- **Used tickets stay used.** A scanned ticket keeps its redemption history and
-  is never rewritten by a refund or a lost dispute.
-- **Financial probes fail closed.** A probe that cannot be evaluated blocks the
-  deployment gate rather than reporting a comforting zero.
+The guarantees these adapters operate under are listed in
+[Refunds, disputes, ledger, and reconciliation](#refunds-disputes-ledger-and-reconciliation)
+above; over-refunding in particular is proven by sixteen simultaneous requests
+staying within the captured amount.
 
 ### Financial operations
 
@@ -450,18 +449,13 @@ rewrite financial history.
 - [Financial ledger](docs/financial-ledger.md)
 - [Provider secret rotation](docs/provider-secret-rotation.md)
 - [Refund reconciliation](docs/refund-reconciliation.md)
-- [Phase 5C2A external providers](docs/phase-5c2a-external-providers.md)
+- [External provider adapters](docs/phase-5c2a-external-providers.md)
 
-## Free serverless staging (Phase 5C2B)
+## Free serverless staging
 
 SeatFlow can be deployed to a free, hosted **staging demo** — Vercel Hobby, Neon
 Free, Upstash Redis and QStash Free, Resend Free — without weakening any rule
 that protects real production.
-
-It is a demo, and it says so. It **cannot take a real payment** (the simulated
-`LOCAL_SIGNED` provider; there is no payment account of any kind) and it can only
-email one approved test recipient. A non-dismissible banner states both to every
-visitor.
 
 The existing worker architecture is unchanged. `SEATFLOW_JOB_MODE=serverless`
 switches scheduling from resident BullMQ workers to signed QStash deliveries
@@ -520,7 +514,7 @@ prints a secret value.
 | `npm run staging:seed` | Idempotent synthetic demo content |
 | `npm run staging:verify:email` | One test message to the approved recipient |
 
-- [Phase 5C2B free staging](docs/phase-5c2b-free-staging.md)
+- [Free staging architecture](docs/phase-5c2b-free-staging.md)
 - [Vercel staging](docs/vercel-staging.md)
 - [Neon staging](docs/neon-staging.md)
 - [Upstash and QStash](docs/upstash-qstash.md)
@@ -536,6 +530,14 @@ Runs against a production build (the dev server injects a hot-reload socket and
 a dev-tools portal that make "no console errors" unverifiable) and against the
 disposable test database — never the development one. Sessions are obtained by
 signing in through the real login form; nothing forges a session.
+
+**Continuous integration.** The `CI` workflow gates every push to `master` and
+every pull request: Prisma validate and generate, ESLint, strict TypeScript,
+unit/component/server/provider/notification/PDF suites, a production build, the
+serial PostgreSQL integration suite, and the Redis transport suite — each
+against an ephemeral service container, never a hosted database. The browser
+suite builds and boots the application before its first assertion, so it runs on
+**pull requests and on demand** (`workflow_dispatch`) rather than on every push.
 
 ## Known staging limitations
 
@@ -555,3 +557,12 @@ These are properties of the free staging demo, not defects:
 - **Free-tier resources.** Neon and Upstash free tiers may cold-start, so the
   first request after an idle period can be slow.
 - **Demo data is disposable** and may be reset or removed at any time.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the check suite, and the rules
+around disposable test databases and secrets.
+
+## License
+
+[MIT](LICENSE) © 2026 Taha Gürvardar
