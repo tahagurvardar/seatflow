@@ -188,6 +188,20 @@ export function isRealProductionDeployment(env: EnvironmentSource) {
 }
 
 /**
+ * Whether this deployment may construct the simulated payment provider.
+ *
+ * The simulated provider guards itself, and it must ask this question rather
+ * than answer it: a guard that reasons about flags directly is how a second,
+ * subtly weaker idea of "staging" gets invented. Routing through
+ * `resolveDeploymentProfile` means the permission is exactly the profile
+ * policy — a claimed staging demo that fails any condition in
+ * `evaluateStagingDemoMode` resolves to `production`, which refuses.
+ */
+export function permitsSimulatedPaymentProvider(env: EnvironmentSource) {
+  return profileCapabilities(resolveDeploymentProfile(env)).allowsSimulatedPayments;
+}
+
+/**
  * What the profile is allowed to relax. Centralized so a new call site cannot
  * invent its own idea of what staging may do.
  */

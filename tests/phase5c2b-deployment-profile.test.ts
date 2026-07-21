@@ -5,10 +5,12 @@ import {
   isRealProductionDeployment,
   isStagingDemoMode,
   isStagingOrigin,
+  permitsSimulatedPaymentProvider,
   profileCapabilities,
   resolveDeploymentProfile,
   type EnvironmentSource,
 } from "../src/features/operations/deployment-profile";
+import { LocalSignedPaymentProvider } from "../src/server/payments/local-signed-provider";
 import { readPaymentEnvironment } from "../src/env/schema";
 import {
   describePaymentCapability,
@@ -347,5 +349,87 @@ describe("payment capability disclosure", () => {
 
   it("does not claim capability without a configured adapter", () => {
     expect(describePaymentCapability({}).realPaymentsAvailable).toBe(false);
+  });
+});
+
+describe("simulated provider construction under a production build", () => {
+  /**
+   * The Phase 5C2B deployed failure.
+   *
+   * Vercel builds the staging demo with NODE_ENV=production, so the provider's
+   * own guard refused to construct and the hourly `refund-reconciliation` job
+   * failed with "disabled in production" on a deployment that is, by every
+   * declared condition, a staging demo. The guard consulted only the
+   * isolated-E2E exception and never asked the profile policy.
+   *
+   * The refusals below matter more than the permission: each removes exactly
+   * one condition from an otherwise-valid demo, and each must still throw.
+   */
+  const SECRET = "staging-demo-simulated-secret-9f3a2c7b81de44";
+
+  it("permits a genuine staging demo on a production build", () => {
+    // The exact deployed case that used to throw.
+    expect(
+      () => new LocalSignedPaymentProvider({ current: SECRET }, "production", stagingDemo()),
+    ).not.toThrow();
+    expect(permitsSimulatedPaymentProvider(stagingDemo())).toBe(true);
+  });
+
+  it("still refuses a real production deployment", () => {
+    // The rule Phase 5C2B must not weaken.
+    expect(
+      () =>
+        new LocalSignedPaymentProvider({ current: SECRET }, "production", {
+          NODE_ENV: "production",
+          PAYMENT_PROVIDER: "LOCAL_SIGNED",
+          LOCAL_PAYMENT_WEBHOOK_SECRET: SECRET,
+        }),
+    ).toThrow(/disabled in production/i);
+  });
+
+  it("refuses every single-condition failure of the demo claim", () => {
+    const refusals: Record<string, EnvironmentSource> = {
+      "missing staging authorization": { SEATFLOW_DEPLOYMENT_PROFILE: undefined },
+      "profile claims real production": { SEATFLOW_DEPLOYMENT_PROFILE: "production" },
+      "invalid canonical origin (app)": { NEXT_PUBLIC_APP_URL: "https://seatflow.com" },
+      "invalid canonical origin (auth)": { BETTER_AUTH_URL: "https://seatflow.com" },
+      "plaintext origin": { NEXT_PUBLIC_APP_URL: "http://seatflow-staging.vercel.app" },
+      "lookalike origin": { NEXT_PUBLIC_APP_URL: "https://vercel.app.evil.example" },
+      "missing webhook secret": { LOCAL_PAYMENT_WEBHOOK_SECRET: undefined },
+      "webhook secret too short": { LOCAL_PAYMENT_WEBHOOK_SECRET: "too-short" },
+      "ambiguous provider selection": { PAYMENT_PROVIDER: "STRIPE" },
+      "reachable payment network": { STRIPE_SECRET_KEY: "sk_test_abc123" },
+      "reachable webhook credential": { STRIPE_WEBHOOK_SECRET_CURRENT: "whsec_abc123" },
+      "live provider mode": { STRIPE_MODE: "live" },
+      "live email mode": { RESEND_MODE: "live" },
+      "production launch declared": { SEATFLOW_PRODUCTION_LAUNCH: "true" },
+    };
+
+    for (const [reason, override] of Object.entries(refusals)) {
+      const environment = stagingDemo(override);
+      expect(permitsSimulatedPaymentProvider(environment), reason).toBe(false);
+      expect(
+        () => new LocalSignedPaymentProvider({ current: SECRET }, "production", environment),
+        reason,
+      ).toThrow(/disabled in production/i);
+    }
+  });
+
+  it("keeps the explicit runtime environment authoritative over the source", () => {
+    // A caller that says "production" must be judged as production even if the
+    // supplied map claims otherwise, so the two can never disagree.
+    expect(
+      () =>
+        new LocalSignedPaymentProvider({ current: SECRET }, "production", {
+          ...stagingDemo(),
+          NODE_ENV: "development",
+        }),
+    ).not.toThrow();
+  });
+
+  it("does not weaken the short-secret rule", () => {
+    expect(
+      () => new LocalSignedPaymentProvider({ current: "short" }, "production", stagingDemo()),
+    ).toThrow(/secret is too short/i);
   });
 });

@@ -3,7 +3,8 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import { CURRENCY_VALUES } from "@/config/site";
-import { isIsolatedE2EMode } from "@/features/operations/e2e-test-mode";
+import type { EnvironmentSource } from "@/features/operations/deployment-profile";
+import { permitsSimulatedPaymentProvider } from "@/features/operations/deployment-profile";
 import {
   normalizeProviderDisputeStatus,
   normalizeProviderPaymentStatus,
@@ -182,13 +183,27 @@ export class LocalSignedPaymentProvider implements PaymentProvider {
   constructor(
     secretOrWindow: string | WebhookSecretWindow,
     runtimeEnvironment = process.env.NODE_ENV,
+    environmentSource: EnvironmentSource = process.env,
   ) {
-    // Forbidden in production, with one audited exception: a demonstrably
-    // isolated E2E harness, which must run against a production build to make
-    // console-error and framework-overlay assertions meaningful. Every
-    // condition in `evaluateIsolatedE2EMode` has to hold; a real production
-    // deployment fails them, so this stays disabled there.
-    if (runtimeEnvironment === "production" && !isIsolatedE2EMode(process.env)) {
+    // Forbidden in production, with two audited exceptions, both of which must
+    // *prove* their isolation rather than declare it:
+    //
+    //  - a demonstrably isolated E2E harness, which must run against a
+    //    production build to make console-error and framework-overlay
+    //    assertions meaningful (`evaluateIsolatedE2EMode`);
+    //  - the free serverless staging demo, which Vercel builds with
+    //    NODE_ENV=production even though it serves a vercel.app origin with a
+    //    simulated provider and redirected email (`evaluateStagingDemoMode`).
+    //
+    // Neither is a flag. `permitsSimulatedPaymentProvider` resolves the
+    // deployment profile, and a claimed staging demo that fails any single
+    // condition resolves to `production` — which refuses here. A real
+    // production deployment fails both, so this stays disabled there.
+    //
+    // `runtimeEnvironment` stays authoritative over the source's own NODE_ENV
+    // so an explicitly-passed environment cannot disagree with the guard.
+    const environment = { ...environmentSource, NODE_ENV: runtimeEnvironment };
+    if (runtimeEnvironment === "production" && !permitsSimulatedPaymentProvider(environment)) {
       throw new Error("The local signed payment provider is disabled in production.");
     }
     this.secretWindow =
