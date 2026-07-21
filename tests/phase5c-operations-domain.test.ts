@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildContentSecurityPolicy,
   buildSecurityHeaders,
+  isLoopbackOrigin,
   isSensitivePath,
   toWebSocketOrigin,
   type SecurityHeaderOptions,
@@ -102,6 +103,76 @@ describe("security headers", () => {
     expect(toWebSocketOrigin("https://a.example")).toBe("wss://a.example");
     expect(toWebSocketOrigin("http://localhost:3001")).toBe("ws://localhost:3001");
     expect(toWebSocketOrigin("nonsense")).toBeNull();
+  });
+
+  it("recognizes every loopback gateway form", () => {
+    for (const origin of [
+      "http://localhost:3001",
+      "http://127.0.0.1:3001",
+      "http://[::1]:3001",
+      "http://0.0.0.0:3001",
+      "http://dev.local:3001",
+      "http://app.localhost:3001",
+    ]) {
+      expect(isLoopbackOrigin(origin)).toBe(true);
+    }
+    expect(isLoopbackOrigin("https://realtime.seatflow.example")).toBe(false);
+    expect(isLoopbackOrigin("not a url")).toBe(false);
+  });
+
+  it("permits the local realtime gateway in development", () => {
+    // Local development may still point connect-src at the loopback gateway.
+    const policy = buildContentSecurityPolicy({
+      ...baseHeaderOptions,
+      isDevelopment: true,
+      realtimeOrigin: "http://localhost:3001",
+    });
+    expect(directive(policy, "connect-src")).toContain("http://localhost:3001");
+    expect(directive(policy, "connect-src")).toContain("ws://localhost:3001");
+  });
+
+  it("never emits a loopback origin in a staging or production CSP", () => {
+    // The staging first deployment shipped `connect-src 'self' http://localhost:3001
+    // ws://localhost:3001` because a build inlined a loopback NEXT_PUBLIC_REALTIME_URL.
+    // Outside development the loopback origin must be dropped entirely.
+    for (const realtimeOrigin of [
+      "http://localhost:3001",
+      "http://127.0.0.1:3001",
+      "http://[::1]:3001",
+      "http://dev.local:3001",
+    ]) {
+      const policy = buildContentSecurityPolicy({
+        ...baseHeaderOptions,
+        isDevelopment: false,
+        realtimeOrigin,
+      });
+      const connect = directive(policy, "connect-src")!;
+      // Polling fallback needs only same-origin.
+      expect(connect).toBe("connect-src 'self'");
+      for (const forbidden of ["localhost", "127.0.0.1", "::1", ".local", "ws://", "http://"]) {
+        expect(policy).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("still emits a real hosted gateway origin in production", () => {
+    // Only loopback is dropped; a genuine remote gateway keeps working.
+    const policy = buildContentSecurityPolicy({
+      ...baseHeaderOptions,
+      isDevelopment: false,
+      realtimeOrigin: "https://realtime.seatflow.example",
+    });
+    expect(directive(policy, "connect-src")).toContain("https://realtime.seatflow.example");
+    expect(directive(policy, "connect-src")).toContain("wss://realtime.seatflow.example");
+  });
+
+  it("uses only 'self' for connect-src when no gateway is configured (polling fallback)", () => {
+    const policy = buildContentSecurityPolicy({
+      ...baseHeaderOptions,
+      isDevelopment: false,
+      realtimeOrigin: null,
+    });
+    expect(directive(policy, "connect-src")).toBe("connect-src 'self'");
   });
 
   it("sends HSTS only over HTTPS", () => {

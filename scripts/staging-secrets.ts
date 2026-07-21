@@ -49,6 +49,17 @@ const requireOptional = args.includes("--require-optional");
 const targetArgument = args.find((entry) => entry.startsWith("--target="));
 const target = targetArgument?.split("=")[1] ?? "preview";
 const assumeYes = args.includes("--yes");
+// Restrict an import to specific already-approved names, e.g. a targeted
+// correction of DATABASE_URL and DIRECT_URL. Never a way to import something
+// that is not already in the approved, non-forbidden set — that guard is below.
+const onlyArgument = args.find((entry) => entry.startsWith("--only="));
+const onlyNames = onlyArgument
+  ? onlyArgument
+      .split("=")[1]
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean)
+  : null;
 
 if (!COMMANDS.includes(command)) {
   console.error(`Usage: npm run staging:secrets -- <${COMMANDS.join("|")}> [--target=preview|production] [--require-optional] [--isolated-e2e] [--yes]`);
@@ -188,9 +199,25 @@ async function runImport() {
     process.exit(1);
   }
 
-  const importable = report.presentVariables.filter(
+  let importable = report.presentVariables.filter(
     (name) => !NON_IMPORTABLE_VARIABLES.includes(name as never),
   );
+
+  // A `--only` filter narrows the import to specific names. Every requested
+  // name must already be in the approved, non-forbidden importable set, so the
+  // filter can only ever *reduce* what would be imported, never smuggle in a
+  // forbidden variable such as QSTASH_TOKEN or a seed password.
+  if (onlyNames) {
+    const notImportable = onlyNames.filter((name) => !importable.includes(name));
+    if (notImportable.length > 0) {
+      console.error(
+        `Refusing --only: these names are not in the approved importable set: ${notImportable.join(", ")}.`,
+      );
+      process.exit(1);
+    }
+    importable = importable.filter((name) => onlyNames.includes(name));
+  }
+
   if (importable.length === 0) {
     console.error("Nothing to import.");
     process.exit(1);

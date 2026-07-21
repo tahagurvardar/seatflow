@@ -18,7 +18,12 @@
  *    inline SVG/data URIs and PDF downloads are delivered as object URLs.
  *  - `connect-src` includes the configured Socket.IO gateway origin and its
  *    WebSocket scheme, otherwise realtime inventory invalidation silently fails
- *    and clients fall back to polling.
+ *    and clients fall back to polling. A **loopback** gateway origin is only ever
+ *    emitted in local development: a hosted staging or production response must
+ *    never advertise `http://localhost` in its policy, both because it is a
+ *    meaningless instruction to a remote browser and because it leaks the
+ *    developer's assumed topology. Outside development the origin is dropped and
+ *    `connect-src` falls back to `'self'`, which is all the polling fallback needs.
  *  - `media-src` allows `blob:` so the scanner's camera stream can be attached.
  *  - `'unsafe-eval'` is added in development only, where React uses `eval` to
  *    rebuild server error stacks.
@@ -47,9 +52,36 @@ export function toWebSocketOrigin(origin: string): string | null {
   }
 }
 
-function connectSources(realtimeOrigin: string | null | undefined) {
+/** A gateway origin that only makes sense on the developer's own machine. */
+export function isLoopbackOrigin(origin: string): boolean {
+  try {
+    // `URL.hostname` returns an IPv6 address wrapped in brackets (`[::1]`);
+    // strip them so the loopback comparison sees the bare address.
+    const host = new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host.endsWith(".local") ||
+      host.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function connectSources(
+  realtimeOrigin: string | null | undefined,
+  allowLoopback: boolean,
+) {
   const sources = ["'self'"];
   if (!realtimeOrigin) return sources;
+
+  // A loopback gateway is legitimate only in local development. On a hosted
+  // deployment it is dropped so the policy never advertises localhost to a
+  // remote browser; `'self'` alone is sufficient for the polling fallback.
+  if (isLoopbackOrigin(realtimeOrigin) && !allowLoopback) return sources;
 
   try {
     const url = new URL(realtimeOrigin);
@@ -79,7 +111,7 @@ export function buildContentSecurityPolicy(options: SecurityHeaderOptions): stri
     ["img-src", ["'self'", "data:", "blob:"]],
     ["font-src", ["'self'", "data:"]],
     ["media-src", ["'self'", "blob:"]],
-    ["connect-src", connectSources(options.realtimeOrigin)],
+    ["connect-src", connectSources(options.realtimeOrigin, options.isDevelopment)],
     ["worker-src", ["'self'", "blob:"]],
     ["object-src", ["'none'"]],
     ["base-uri", ["'self'"]],
