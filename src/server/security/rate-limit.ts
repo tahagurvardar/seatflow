@@ -17,6 +17,11 @@ import {
   type RateLimitPolicyName,
 } from "@/features/security/rate-limit-policy";
 import { createRedisConnection, ensureRedisConnected } from "@/lib/redis";
+import {
+  createUpstashRestConfiguration,
+  UpstashRestRateLimitBackend,
+  type RateLimitBackend,
+} from "@/server/security/rate-limit-backend";
 import { buildRateLimitKey, buildRateLimitSubject } from "@/server/security/client-key";
 import { consumeRateLimit } from "@/server/realtime/request-rate-limit";
 
@@ -88,12 +93,29 @@ function connectLimiter(redis: Redis) {
   return limiterConnection;
 }
 
+/**
+ * REST backend, resolved once per process. Holds no socket, so caching it is
+ * only about avoiding repeated configuration parsing.
+ */
+let restBackend: RateLimitBackend | null | undefined;
+
+function getRestBackend(environment: {
+  UPSTASH_REDIS_REST_URL?: string;
+  UPSTASH_REDIS_REST_TOKEN?: string;
+}) {
+  if (restBackend !== undefined) return restBackend;
+  const configuration = createUpstashRestConfiguration(environment);
+  restBackend = configuration ? new UpstashRestRateLimitBackend(configuration) : null;
+  return restBackend;
+}
+
 /** Test seam: drop the cached connection between suites. */
 export async function resetRateLimiterRedis() {
   const existing = limiterRedis;
   limiterRedis = null;
   limiterRedisUnavailableUntil = 0;
   limiterConnection = null;
+  restBackend = undefined;
   if (existing) {
     existing.removeAllListeners("error");
     existing.disconnect();
@@ -185,6 +207,29 @@ export async function enforceRateLimit(
 
   const localKey = `${policy.name}:${subject}`;
   const redisEnvironment = readOptionalInventoryEventEnvironment();
+
+  // Prefer REST when Upstash exposes it. A serverless deployment fans out
+  // across isolates, and a socket per isolate is how a free-tier connection
+  // limit gets exhausted; REST holds none. Same script, same policy.
+  const restBackend = redisEnvironment ? getRestBackend(redisEnvironment) : null;
+  if (restBackend && redisEnvironment && Date.now() >= limiterRedisUnavailableUntil) {
+    try {
+      const count = await restBackend.increment(
+        buildRateLimitKey({
+          prefix: redisEnvironment.REDIS_STREAM_PREFIX,
+          policyName: policy.name,
+          subject,
+        }),
+        policy.windowSeconds * 1_000,
+        REDIS_OPERATION_TIMEOUT_MS,
+      );
+      const decision = decideRateLimit({ policy, count, backendAvailable: true });
+      return { ...decision, policyName: policy.name, addressLabel };
+    } catch {
+      limiterRedisUnavailableUntil = Date.now() + REDIS_COOLDOWN_MS;
+    }
+  }
+
   const redis =
     redisEnvironment && Date.now() >= limiterRedisUnavailableUntil ? getLimiterRedis() : null;
 
@@ -241,6 +286,8 @@ export async function enforceRateLimit(
 export async function checkDistributedRateLimitAvailable(): Promise<boolean> {
   const environment = readOptionalInventoryEventEnvironment();
   if (!environment) return false;
+  const rest = getRestBackend(environment);
+  if (rest) return rest.available(REDIS_OPERATION_TIMEOUT_MS);
   const redis = getLimiterRedis();
   if (!redis) return false;
   try {

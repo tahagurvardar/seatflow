@@ -282,6 +282,45 @@ rewrite financial history.
 - [Refund reconciliation](docs/refund-reconciliation.md)
 - [Phase 5C2A external providers](docs/phase-5c2a-external-providers.md)
 
+## Free serverless staging (Phase 5C2B)
+
+SeatFlow can be deployed to a free, hosted **staging demo** — Vercel Hobby, Neon
+Free, Upstash Redis and QStash Free, Resend Free — without weakening any rule
+that protects real production.
+
+It is a demo, and it says so. It **cannot take a real payment** (the simulated
+`LOCAL_SIGNED` provider; there is no payment account of any kind) and it can only
+email one approved test recipient. A non-dismissible banner states both to every
+visitor.
+
+The existing worker architecture is unchanged. `SEATFLOW_JOB_MODE=serverless`
+switches scheduling from resident BullMQ workers to signed QStash deliveries
+against the *same* bounded, idempotent operations; `worker` remains the default
+and the production-grade path.
+
+```bash
+cp .env.staging.example .env.staging.local   # then fill in your own values
+npm run staging:secrets -- check             # validate; names only, never values
+npm run staging:migrate -- status            # read-only against Neon
+```
+
+Every outward-facing command requires an explicit typed confirmation, and none
+prints a secret value.
+
+| Command | Effect |
+|---|---|
+| `npm run staging:secrets -- check\|list\|import` | Validate, inventory, or import into Vercel |
+| `npm run staging:migrate -- status\|deploy` | Neon migrations; `reset` is unreachable by construction |
+| `npm run staging:schedule -- list\|apply\|remove` | QStash job schedules |
+| `npm run staging:seed` | Idempotent synthetic demo content |
+| `npm run staging:verify:email` | One test message to the approved recipient |
+
+- [Phase 5C2B free staging](docs/phase-5c2b-free-staging.md)
+- [Vercel staging](docs/vercel-staging.md)
+- [Neon staging](docs/neon-staging.md)
+- [Upstash and QStash](docs/upstash-qstash.md)
+- [Resend staging](docs/resend-staging.md)
+
 ### Browser verification
 
 ```bash

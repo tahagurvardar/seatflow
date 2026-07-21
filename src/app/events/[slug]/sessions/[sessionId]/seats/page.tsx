@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/icon";
 import { ROUTES } from "@/config/site";
 import { getServerEnvironment } from "@/env/server";
 import { formatVenueDateTime } from "@/features/events/date-time";
+import { realtimeUrlForClient } from "@/features/inventory-events/realtime-endpoint";
 import { createRealtimeRoomTicket } from "@/features/inventory-events/room-ticket";
 import { getCurrentSession } from "@/lib/session";
 import { getDatabase } from "@/lib/database";
@@ -42,8 +43,11 @@ export default async function SeatSelectionPage({ params }: SeatsPageProps) {
     sessionId,
     secret: getServerEnvironment().BETTER_AUTH_SECRET,
   });
-  const realtimeUrl =
-    process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:3001";
+  // Empty means "no gateway, poll instead". A hosted deployment must never
+  // fall back to a loopback URL: that points at the visitor's own machine.
+  const realtimeUrl = realtimeUrlForClient(process.env, {
+    hosted: process.env.NODE_ENV === "production",
+  });
 
   return (
     <Section className="bg-slate-50">

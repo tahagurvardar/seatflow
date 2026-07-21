@@ -136,6 +136,34 @@ export function evaluateWorkerHeartbeat(input: {
   return { label: "healthy", ageSeconds };
 }
 
+/**
+ * Which workers this deployment should expect a heartbeat from.
+ *
+ * A serverless deployment has no resident processes, so the realtime gateway
+ * genuinely does not exist there — clients poll instead. Reporting it as a
+ * missing worker would leave readiness permanently degraded for a reason that
+ * is not a fault, and a signal that is always yellow is a signal nobody reads.
+ *
+ * The scheduled jobs still report heartbeats, because a scheduler that quietly
+ * stops delivering is a real failure and must remain visible. That is the whole
+ * point of keeping heartbeats in PostgreSQL rather than in the scheduler.
+ */
+export function expectedWorkerTypes(input: {
+  jobMode: "worker" | "serverless";
+}): readonly string[] {
+  const scheduled = [
+    "INVENTORY_OUTBOX_DISPATCHER",
+    "HOLD_EXPIRY_WORKER",
+    "TICKET_ISSUANCE_DISPATCHER",
+    "NOTIFICATION_DISPATCHER",
+    "PAYMENT_RECONCILIATION",
+    "REFUND_RECONCILIATION",
+  ];
+  return input.jobMode === "serverless"
+    ? scheduled
+    : [...scheduled, "REALTIME_GATEWAY", "FINANCIAL_OUTBOX_DISPATCHER"];
+}
+
 /** Map a worker label onto a readiness check status. */
 export function workerLabelToCheckStatus(label: WorkerHealthLabel): CheckStatus {
   switch (label) {

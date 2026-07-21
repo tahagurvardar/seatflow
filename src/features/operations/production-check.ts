@@ -520,6 +520,248 @@ export function validateProductionConfiguration(input: {
   return findings;
 }
 
+/**
+ * Staging-demo configuration gates.
+ *
+ * A staging demo is *not* production with the rules turned off. It is its own
+ * world with its own rules, several of which are the exact inverse of the
+ * production ones: production refuses `LOCAL_SIGNED` and this refuses anything
+ * else; production refuses `RESEND_MODE=test` and this requires it.
+ *
+ * Writing them as a separate function rather than as exceptions inside
+ * `validateProductionConfiguration` is deliberate. Threading a profile flag
+ * through that function would mean every production rule grows a branch that
+ * could be wrong, and the one bug that matters — a real deployment silently
+ * taking a staging exemption — becomes possible. Two functions cannot make that
+ * mistake: real production never calls this one.
+ */
+export function validateStagingDemoConfiguration(input: {
+  env: EnvironmentSource;
+  probes?: ProductionCheckProbes;
+}): ProductionCheckFinding[] {
+  const { env } = input;
+  const findings: ProductionCheckFinding[] = [];
+  const error = (id: string, message: string) =>
+    findings.push({ id, severity: "error", message });
+  const warn = (id: string, message: string) =>
+    findings.push({ id, severity: "warning", message });
+
+  // ---- Identity -----------------------------------------------------------
+  if (env.SEATFLOW_DEPLOYMENT_PROFILE !== "staging-demo") {
+    error(
+      "profile_mismatch",
+      "SEATFLOW_DEPLOYMENT_PROFILE must be 'staging-demo' for this check to apply.",
+    );
+  }
+  if (env.SEATFLOW_PRODUCTION_LAUNCH === "true") {
+    error(
+      "production_launch_declared",
+      "SEATFLOW_PRODUCTION_LAUNCH must not be set: this deployment is a demo, not a launch.",
+    );
+  }
+  if (env.SEATFLOW_E2E_TEST_MODE) {
+    error(
+      "e2e_test_mode_enabled",
+      "SEATFLOW_E2E_TEST_MODE belongs to the isolated browser-test harness and must not be set here.",
+    );
+  }
+
+  // ---- Payments: simulated, and provably unable to become real ------------
+  if (env.PAYMENT_PROVIDER !== "LOCAL_SIGNED") {
+    error(
+      "payment_provider_not_simulated",
+      "PAYMENT_PROVIDER must be LOCAL_SIGNED. This environment demonstrates a simulated payment and has no payment account.",
+    );
+  }
+  if (isWeakSecret(env.LOCAL_PAYMENT_WEBHOOK_SECRET)) {
+    error(
+      "local_payment_secret_weak",
+      "LOCAL_PAYMENT_WEBHOOK_SECRET is missing, too short, low-entropy, or a placeholder.",
+    );
+  }
+  for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET_CURRENT"]) {
+    if (env[name]) {
+      error(
+        "stripe_credentials_present",
+        `${name} must not be set: a demo that can reach a payment network is not a demo.`,
+      );
+    }
+  }
+
+  // ---- Email: redirected, and provably unable to reach a customer ---------
+  if (env.NOTIFICATION_PROVIDER !== "RESEND") {
+    error(
+      "notification_provider_unexpected",
+      "NOTIFICATION_PROVIDER must be RESEND so delivery is exercised against a real provider in test mode.",
+    );
+  }
+  if (env.RESEND_MODE !== "test") {
+    error(
+      "resend_mode_not_test",
+      "RESEND_MODE must be 'test'; live mode would let this environment email a real address.",
+    );
+  }
+  if (!env.RESEND_TEST_RECIPIENT) {
+    error(
+      "resend_recipient_missing",
+      "RESEND_TEST_RECIPIENT is required; it is the only address this environment may email.",
+    );
+  }
+  if (env.LOCAL_EMAIL_CAPTURE_DIR) {
+    error(
+      "local_capture_enabled",
+      "LOCAL_EMAIL_CAPTURE_DIR must not be set on a hosted deployment.",
+    );
+  }
+
+  // ---- Secrets ------------------------------------------------------------
+  // A demo's data is synthetic, but its secrets are still real secrets: a weak
+  // ticket credential key forges admission just as effectively here.
+  for (const [name, id] of [
+    ["TICKET_CREDENTIAL_SECRET", "ticket_secret_weak"],
+    ["BETTER_AUTH_SECRET", "auth_secret_weak"],
+  ] as const) {
+    if (isWeakSecret(env[name])) {
+      error(id, `${name} is missing, too short, low-entropy, or a placeholder.`);
+    }
+  }
+  if (
+    env.TICKET_CREDENTIAL_SECRET &&
+    env.BETTER_AUTH_SECRET &&
+    env.TICKET_CREDENTIAL_SECRET === env.BETTER_AUTH_SECRET
+  ) {
+    error(
+      "secret_reuse",
+      "TICKET_CREDENTIAL_SECRET must not equal BETTER_AUTH_SECRET.",
+    );
+  }
+
+  // ---- Origins ------------------------------------------------------------
+  for (const name of ["BETTER_AUTH_URL", "NEXT_PUBLIC_APP_URL"]) {
+    const value = env[name];
+    if (!value) {
+      error(`${name.toLowerCase()}_missing`, `${name} must be set.`);
+      continue;
+    }
+    if (!isHttpsUrl(value)) {
+      error(`${name.toLowerCase()}_insecure`, `${name} must use https://.`);
+    }
+    if (isLoopbackUrl(value)) {
+      error(`${name.toLowerCase()}_loopback`, `${name} points at a loopback host.`);
+    }
+  }
+
+  // ---- Database -----------------------------------------------------------
+  if (!isValidPostgresUrl(env.DATABASE_URL)) {
+    error("database_url_invalid", "DATABASE_URL is missing or not a postgresql:// URL.");
+  }
+  if (env.DIRECT_URL && !isValidPostgresUrl(env.DIRECT_URL)) {
+    error("direct_url_invalid", "DIRECT_URL is set but is not a postgresql:// URL.");
+  }
+  if (env.TEST_DATABASE_URL) {
+    error(
+      "test_database_present",
+      "TEST_DATABASE_URL must not be sent to a hosted environment.",
+    );
+  }
+
+  // ---- Job delivery -------------------------------------------------------
+  // A serverless deployment has no resident workers, so the production check's
+  // process declarations do not apply. What replaces them is the signing key
+  // pair: without it the job endpoints cannot authenticate a delivery, and
+  // scheduled work silently never runs.
+  if (env.SEATFLOW_JOB_MODE !== "serverless") {
+    error(
+      "job_mode_not_serverless",
+      "SEATFLOW_JOB_MODE must be 'serverless'; a free serverless platform cannot host a resident worker.",
+    );
+  }
+  for (const name of ["QSTASH_CURRENT_SIGNING_KEY", "QSTASH_NEXT_SIGNING_KEY"]) {
+    if (!env[name]) {
+      error(
+        "qstash_signing_key_missing",
+        `${name} is required; without both keys the internal job endpoints reject every delivery and scheduled work never runs.`,
+      );
+    }
+  }
+  if (
+    env.QSTASH_CURRENT_SIGNING_KEY &&
+    env.QSTASH_CURRENT_SIGNING_KEY === env.QSTASH_NEXT_SIGNING_KEY
+  ) {
+    error(
+      "qstash_keys_identical",
+      "QSTASH_NEXT_SIGNING_KEY must differ from QSTASH_CURRENT_SIGNING_KEY.",
+    );
+  }
+
+  // ---- Redis --------------------------------------------------------------
+  // Optional by design here: without it the deployment loses realtime delivery
+  // and distributed rate limiting, and falls back to polling and per-process
+  // counters. Neither costs correctness, so this is a warning.
+  if (!env.REDIS_URL && !env.UPSTASH_REDIS_REST_URL) {
+    warn(
+      "redis_absent",
+      "Neither REDIS_URL nor UPSTASH_REDIS_REST_URL is set. Inventory events cannot be delivered and clients will rely entirely on polling.",
+    );
+  }
+  if (env.REDIS_STREAM_PREFIX && !/staging/i.test(env.REDIS_STREAM_PREFIX)) {
+    warn(
+      "redis_prefix_unscoped",
+      "REDIS_STREAM_PREFIX does not name the staging environment; a shared namespace lets environments read each other's events.",
+    );
+  }
+
+  // ---- Debug and abuse controls ------------------------------------------
+  if (env.LOG_LEVEL === "debug") {
+    warn("debug_logging", "LOG_LEVEL=debug is verbose for a shared environment.");
+  }
+  if (env.RATE_LIMIT_ENABLED === "false") {
+    error("rate_limit_disabled", "RATE_LIMIT_ENABLED=false disables abuse controls.");
+  }
+  if (env.SECURITY_HEADERS_ENABLED === "false") {
+    error("security_headers_disabled", "SECURITY_HEADERS_ENABLED=false disables the header policy.");
+  }
+
+  // ---- Deployment gates from live probes ---------------------------------
+  if (input.probes?.migrationsBehind === true) {
+    error("migrations_behind", "The database is behind the migrations this build expects.");
+  }
+
+  return findings;
+}
+
+/**
+ * The honest headline for a deployment: can it take a real payment?
+ *
+ * Reported separately from the findings so no reader has to infer it, and so
+ * the staging UI can state it plainly rather than implying it.
+ */
+export function describePaymentCapability(env: EnvironmentSource) {
+  if (env.PAYMENT_PROVIDER === "LOCAL_SIGNED") {
+    return {
+      realPaymentsAvailable: false,
+      summary:
+        "Payments are simulated. No card is accepted, no money moves, and no payment network is contacted.",
+    };
+  }
+  if (env.PAYMENT_PROVIDER === "STRIPE" && env.STRIPE_MODE === "live") {
+    return {
+      realPaymentsAvailable: true,
+      summary: "Payments are live. Real cards are charged.",
+    };
+  }
+  if (env.PAYMENT_PROVIDER === "STRIPE") {
+    return {
+      realPaymentsAvailable: false,
+      summary: "Payments run against the provider's test mode. No real money moves.",
+    };
+  }
+  return {
+    realPaymentsAvailable: false,
+    summary: "No reviewed payment adapter is configured. Checkout cannot complete.",
+  };
+}
+
 export function summarizeFindings(findings: readonly ProductionCheckFinding[]) {
   const errors = findings.filter((finding) => finding.severity === "error");
   const warnings = findings.filter((finding) => finding.severity === "warning");

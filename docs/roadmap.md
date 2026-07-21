@@ -140,14 +140,52 @@ sanitized production-like configuration with synthetic placeholders it reports
 no findings, which validates that the configuration rules are satisfiable — not
 that any provider has been verified.
 
-## Phase 5C2B — sandbox verification and launch (next)
+## Phase 5C2B-1 — free serverless staging adaptation (code complete, nothing deployed)
 
-1. Real Stripe test-mode verification: payment intent, partial and full refund,
-   refund webhook settlement, dispute events, and secret rotation against a real
-   test account.
-2. Real Resend verification against an approved internal test recipient only.
-3. Authenticated end-to-end browser coverage: the current Playwright suite
+Adapts the platform to a free, hosted, internet-reachable staging demo without
+weakening any production rule. See
+[phase-5c2b-free-staging.md](phase-5c2b-free-staging.md).
+
+- Four deployment profiles (`local`, `isolated-e2e`, `staging-demo`,
+  `production`). An undeclared profile on a production build resolves to
+  `production` — the strictest world — so forgetting to declare one fails closed.
+- A narrow `staging-demo` guard permitting `LOCAL_SIGNED` only when **every**
+  condition holds: production build, https vercel.app origins on both URLs,
+  simulated provider selected, strong local secret, no Stripe credential, no
+  live provider mode, no production-launch marker.
+- Serverless job delivery: `POST /api/internal/jobs/<job>` with official QStash
+  signature verification (current **and** next key), strict payloads carrying no
+  business state, bounded bodies, and PostgreSQL-backed delivery receipts for
+  duplicate suppression.
+- Redis adapted for serverless: Upstash REST preferred, lazily reused TCP as
+  fallback, and an explicit unavailable transport that **throws** rather than
+  letting the dispatcher mark an outbox row processed and lose the event.
+- Realtime falls back to authoritative polling when no gateway exists.
+- Staging tooling: secret validation and Vercel import, Neon migration safety,
+  QStash scheduling, idempotent seed, manual Resend verification. None prints a
+  secret value; each outward-facing one requires a typed confirmation.
+
+One additive migration (`20260720000000_phase_5c2b_serverless_job_delivery`).
+
+**Two defects found and fixed.** `RESEND_FROM_ADDRESS` was validated with the
+*recipient* rule, so the standard `Display Name <address>` sender form could not
+boot. The seat pages defaulted `NEXT_PUBLIC_REALTIME_URL` to
+`http://localhost:3001`, which on a hosted deployment points every visitor's
+browser at their own machine.
+
+**Nothing has been deployed.** No Neon migration applied, no Vercel deployment,
+no QStash message published, and no real email sent.
+
+## Phase 5C2B-2 — sandbox verification and launch (next)
+
+1. Populate `.env.staging.local`, apply Neon migrations, import variables into
+   Vercel, and perform the first staging deployment.
+2. Real Resend verification against the approved test recipient only.
+3. Real Stripe test-mode verification: payment intent, partial and full refund,
+   refund webhook settlement, dispute events, and secret rotation. **Blocked** —
+   no Stripe account exists for this project.
+4. Authenticated end-to-end browser coverage: the current Playwright suite
    verifies authorization boundaries, layout, and leak-safety, but does not yet
    drive a signed-in customer through a refund, because no Better Auth session
    seed helper exists.
-4. Staging deployment, live-traffic runbook rehearsal, and the launch decision.
+5. Live-traffic runbook rehearsal and the launch decision.

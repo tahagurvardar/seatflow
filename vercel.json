@@ -1,0 +1,29 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["fra1"],
+  "functions": {
+    "src/app/api/internal/jobs/[job]/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/payments/webhooks/[provider]/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/tickets/download/[token]/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/internal/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+      ]
+    },
+    {
+      "source": "/api/health/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
+    }
+  ]
+}

@@ -551,3 +551,107 @@ A crash between storing and processing leaves verified events unprocessed. `npm 
 ### Probe failure
 
 If `production:check` reports `financial_probe_unavailable`, the gates are unknown, not clear. Resolve the probe failure — usually database reachability — before deploying. Never interpret an unevaluated gate as a pass.
+
+## Phase 5C2B runbooks — free serverless staging
+
+These apply to the staging demo only. It holds synthetic data, has no commercial
+SLA on any component, and may be reset. Nothing below is an emergency.
+
+### Scheduled work has stopped
+
+**Symptom.** Worker heartbeats go stale in `/api/health/ready`; holds are not
+expiring; queued email is not sending.
+
+Nothing is *wrong* — PostgreSQL is authoritative and no state is lost. Work is
+delayed, and lazy hold expiry during acquisition still frees seats for sessions
+someone is actively browsing.
+
+1. `npm run staging:schedule -- list` shows the intended schedule.
+2. Check the Upstash QStash console for the actual schedules and their delivery
+   log. A 401 on every delivery means the signing keys in Vercel no longer match
+   Upstash — rotate both `QSTASH_CURRENT_SIGNING_KEY` and
+   `QSTASH_NEXT_SIGNING_KEY` and redeploy.
+3. A 503 on every delivery means `SEATFLOW_JOB_MODE` is not `serverless`, or the
+   environment failed to parse.
+4. Exhausted free-tier message budget: wait for the daily reset, or reduce
+   cadence in `scripts/staging-schedule.ts`.
+5. Re-register if the schedules are gone: `npm run staging:schedule -- apply`.
+
+Never work around this by invoking the job endpoints by hand — they require a
+valid signature, and that is the point.
+
+### Job endpoint returning 401
+
+The signature did not verify against either key. In order of likelihood: the
+Vercel environment is behind an Upstash key rotation; only one of the two keys
+was updated; or the delivery is not from QStash at all. The endpoint returns a
+fixed body either way, so an attacker probing it learns nothing.
+
+### Job endpoint returning 503
+
+Retryable by design — QStash will deliver again. Either `SEATFLOW_JOB_MODE` is
+not `serverless`, the serverless environment section failed validation, or the
+job itself hit a transient dependency failure. Check the Vercel function log for
+the `job failed` record and its `safeErrorCode`.
+
+### The same job keeps being redelivered
+
+Check `JobDeliveryReceipt` for that job. Many rows with rising `attemptCount` and
+a repeated `safeErrorCode` that is not transient in nature means a permanent
+fault is being classified as retryable. Fix the underlying fault; do not silence
+the retry.
+
+### Neon is slow or unreachable
+
+Free-tier Neon scales to zero, so the first query after idle takes seconds. That
+is normal. If it persists, check the Neon console for compute status and the
+project's storage quota.
+
+Do **not** run the load harness against Neon. It is loopback-only unless
+explicitly overridden, and pointing it at a free tier would exhaust the quota and
+prove nothing about production capacity.
+
+### Redis unavailable
+
+Expected degradation, not an incident: inventory events are not delivered,
+clients fall back to authoritative polling, and rate limiting drops to
+per-process counters. Every hold, payment, booking, ticket, and entry decision
+remains correct.
+
+Outbox rows stay pending and retryable — the unavailable transport throws rather
+than letting the dispatcher mark them processed. They drain when Redis returns.
+
+### An email did not arrive
+
+Only `RESEND_TEST_RECIPIENT` can receive anything; every other recipient is
+redirected there. Look for the `[test <digest>]` subject prefix, which identifies
+the intended recipient without revealing the address.
+
+`npm run staging:verify:email` sends one marked test message. If it fails,
+`safeErrorCode` distinguishes a retryable provider problem from a permanent one
+such as an unverified sender.
+
+### The demo banner is missing
+
+The banner renders whenever `profileCapabilities(profile).requiresDemoDisclosure`
+is true. If it is absent on the staging deployment, the profile has resolved to
+`production` — meaning the staging-demo guard refused a condition. That is a
+**configuration error to fix, not to work around**: the deployment is presenting
+itself as production while running a simulated payment provider.
+
+Check, in order: `SEATFLOW_DEPLOYMENT_PROFILE`, both origins being https
+vercel.app, absence of every `STRIPE_*` variable, and `SEATFLOW_PRODUCTION_LAUNCH`.
+
+### Rolling staging back
+
+Redeploy a previous Vercel deployment. **Never** revert a migration to match
+rolled-back code; fix forward, exactly as in production. See runbook 14.
+
+### Decommissioning
+
+1. `npm run staging:schedule -- remove`
+2. Delete the Vercel project
+3. Delete the Neon project and the Upstash database
+4. Revoke the Resend API key
+
+Nothing here holds real customer data, so there is no retention obligation.

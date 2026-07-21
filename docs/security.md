@@ -183,3 +183,96 @@ Two further containments:
 - The override is **not reachable from any customer-controlled input**. It is read from process environment only, never from a request, header, cookie, or form field.
 
 The browser harness itself never bypasses authentication or authorization: it signs in through the real login form, and it never writes a Refund, RefundAttempt, Booking, BookingSeat, Ticket, TicketCredential, inventory, ledger, dispute, or webhook-processing row. Its only privileged act is generating a valid synthetic LOCAL_SIGNED signature and POSTing it to the application's own webhook route, exactly as the provider would.
+
+## Phase 5C2B — staging demo, serverless jobs, and secret handling
+
+### The staging-demo override
+
+`staging-demo` permits `LOCAL_SIGNED` on a production build. Like the
+isolated-E2E override, it is granted only when **every** condition holds:
+
+| Condition | Refusal |
+| --- | --- |
+| `SEATFLOW_DEPLOYMENT_PROFILE=staging-demo` | `PROFILE_NOT_STAGING_DEMO` |
+| `NODE_ENV=production` | `NOT_PRODUCTION_BUILD` |
+| **Both** `BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL` are https vercel.app (or the declared staging origin) | `ORIGIN_NOT_STAGING` |
+| `PAYMENT_PROVIDER=LOCAL_SIGNED` | `PAYMENT_PROVIDER_NOT_LOCAL_SIGNED` |
+| `LOCAL_PAYMENT_WEBHOOK_SECRET` present, ≥ 32 characters | `LOCAL_SECRET_MISSING` |
+| **No** `STRIPE_SECRET_KEY`, **no** `STRIPE_WEBHOOK_SECRET_CURRENT` | `STRIPE_CREDENTIALS_PRESENT` |
+| **No** `STRIPE_MODE=live`, **no** `RESEND_MODE=live` | `LIVE_PROVIDER_MODE` |
+| **No** `SEATFLOW_PRODUCTION_LAUNCH=true` | `PRODUCTION_LAUNCH_DECLARED` |
+
+Checking **both** origins matters: verifying only one would let a deployment
+serve a real domain while claiming demo status through the other. Holding any
+Stripe credential disqualifies the mode outright — a process that can reach a
+payment network is not a simulated demo, whatever else it claims.
+
+A deployment that claims the profile but fails a condition is classified as
+production, so it is refused the simulated provider rather than silently granted
+it. The predicate is pure — no `process.env`, no I/O, no clock — so every
+refusal path is unit tested. It is read from process environment only, never
+from a request, header, cookie, or form field.
+
+Real production is validated by a **separate** function.
+`validateStagingDemoConfiguration` has several inverted rules (it requires what
+production refuses), and keeping them apart means a production deployment cannot
+take a staging exemption through a mis-set flag.
+
+### Internal job endpoints
+
+`POST /api/internal/jobs/<job>` is internet-reachable and treated as hostile
+input throughout. Verification order is deliberate:
+
+1. bound the declared `content-length`
+2. confirm `SEATFLOW_JOB_MODE=serverless`
+3. verify the QStash signature over the **exact raw bytes**
+4. only then parse, against a strict schema
+5. confirm the path and the body name the same job
+
+Verifying before parsing matters: a parser is a far larger attack surface than a
+MAC comparison, and running it on unverified input would expose it to anyone who
+can reach the URL.
+
+Signatures are verified with the official `@upstash/qstash` `Receiver` against
+the current key, then the next, so rotation has no window in which every delivery
+fails. Which key matched is recorded — if deliveries are suddenly verifying on
+the next key, the current one has already been retired upstream.
+
+**A job payload carries no business state.** The schema is strict, so a payload
+containing `bookingId`, `actorUserId`, `amountMinor`, or `paymentStatus` is
+*rejected* rather than ignored. Every such fact is read from PostgreSQL inside
+the handler. A forged payload can at most ask for work to happen sooner, which
+the scheduler may do anyway.
+
+Never logged: the signature header, either signing key, the QStash token, the
+raw body, or any identifier a job touched. Error summaries are stripped of
+connection strings and URLs and truncated to 80 characters before they can reach
+a scheduler log this platform does not control.
+
+### Sender versus recipient addresses
+
+A recipient must be a bare `local@domain` — anything else is a header-injection
+risk. A *sender* is legitimately an RFC 5322 mailbox and normally carries a
+display name. Phase 5C2A applied the recipient rule to both, which rejected the
+standard `SeatFlow <onboarding@resend.dev>` form.
+
+`sender-address.ts` now parses senders, accepting both forms while bounding the
+display name and stripping anything that could restructure a header: CR, LF, tab,
+angle brackets, quotes, commas, semicolons. Recipient validation is unchanged.
+
+### Staging secret handling
+
+`.env.staging.local` is gitignored and never printed. Every tool that reads it
+reports **variable names and verdicts only**:
+
+- `validateStagingSecrets` returns findings naming a variable and stating what is
+  wrong, never quoting the value — a property asserted directly in the suite.
+- The Vercel importer passes values over **stdin**, never as arguments, which
+  would be visible in the OS process table.
+- The migration command filters Prisma's output for `postgres://` URLs and Neon
+  host patterns before it reaches a terminal.
+- The email verifier masks both addresses and prints a truncated message id.
+
+Detected and refused: placeholders, malformed URLs, the Neon pooled/direct swap,
+local development URLs, any Stripe credential, live provider modes, local-only
+variables, weak or reused secrets, and identical QStash signing keys.

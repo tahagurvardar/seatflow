@@ -228,3 +228,65 @@ Probe failures report a probe name only. A driver message can quote schema and c
 `npm run financial:report` prints bounded aggregates — refund and dispute queue depths, oldest pending age, divergence counts by reason, and revocation backlog — with no reference, id, email, or provider identifier. When a probe could not be evaluated it says so explicitly and instructs the reader to treat that gate as unknown rather than zero.
 
 The `REFUND_RECONCILIATION` and `FINANCIAL_OUTBOX_DISPATCHER` worker types report liveness through the Phase 5C1 `WorkerHeartbeat` table, so a stopped reconciler is visible in readiness without any Redis dependency.
+
+## Phase 5C2B — serverless job observability
+
+### Heartbeats work identically in both modes
+
+A serverless job writes a `WorkerHeartbeat` on every invocation, using the same
+`WorkerType` its resident counterpart would. A scheduler that silently stops
+delivering therefore shows up exactly as a crashed worker does: a stale
+heartbeat in `/api/health/ready` and `/api/operations/metrics`.
+
+This is why heartbeats live in PostgreSQL rather than in the scheduler. A
+QStash-based heartbeat would disappear at the same moment QStash stopped
+delivering, leaving an operator with no signal at the one time they need one.
+
+### Expected workers depend on the mode
+
+`expectedWorkerTypes({ jobMode })` omits `REALTIME_GATEWAY` in serverless mode,
+because there genuinely is no gateway process there — clients poll instead.
+Reporting it as missing would leave readiness permanently degraded for something
+that is not a fault, and a signal that is always yellow is a signal nobody reads.
+
+Every scheduled job is still expected, because a scheduler that stops **is** a
+real failure.
+
+### Readiness reports the profile
+
+The platform-admin view of `/api/health/ready` includes `profile` and `jobMode`
+alongside the per-check breakdown, so an operator can tell at a glance which
+world they are looking at. The anonymous body stays minimal — an overall status
+only — so a caller cannot enumerate which dependency is unhealthy.
+
+### Delivery receipts
+
+`JobDeliveryReceipt` records that a delivery arrived and how it ended:
+
+| Column | Meaning |
+| --- | --- |
+| `messageId` | Scheduler-supplied, normalized to a constrained grammar |
+| `job`, `environment` | Bounded labels |
+| `receivedAt`, `completedAt` | A receipt completes only on a terminal outcome |
+| `outcome` | `COMPLETED`, `RETRYABLE_FAILURE`, `PERMANENT_FAILURE` |
+| `attemptCount`, `durationMs`, `safeErrorCode` | Bounded counters and a safe code |
+
+There is deliberately **no** column for the signature, the raw payload, a
+signing key, a caller address, or any booking, payment, refund, or ticket
+identifier. A receipt records that an operation ran, never what it decided.
+
+A retryable failure leaves the receipt uncompleted so the next delivery can claim
+it again; marking it completed would strand the work. Receipt writes are
+best-effort and swallowed on failure — observability must never break the work it
+observes, and a lost receipt costs duplicate suppression, not correctness.
+
+`pruneJobDeliveryReceipts` removes rows past a retention window in bounded
+batches. Nothing reads them downstream, so pruning is safe.
+
+### Interpreting a retry storm
+
+Rising `attemptCount` across many receipts for one job means either a genuine
+dependency failure or a permanent fault being misclassified as retryable. Check
+`safeErrorCode` first: a repeated identical code that is not transient in nature
+suggests the classification is wrong, and the job will retry until its budget is
+exhausted rather than surfacing.

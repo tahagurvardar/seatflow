@@ -1536,6 +1536,39 @@ enum WorkerHealthStatus {
   STOPPED
 }
 
+enum ServerlessJobOutcome {
+  COMPLETED
+  RETRYABLE_FAILURE
+  PERMANENT_FAILURE
+}
+
+/// Phase 5C2B serverless job delivery receipts.
+///
+/// QStash guarantees at-least-once delivery, so the same message can arrive
+/// more than once — after a network timeout, or as a deliberate replay. The
+/// underlying operations are all idempotent, so a repeat is safe; this table
+/// exists so a repeat is also *visible* and cheap, letting a completed delivery
+/// be recognized and skipped instead of re-running a batch.
+///
+/// Rows are operational metadata only. They deliberately have no column for the
+/// signature, the raw payload, a signing key, a caller address, or any booking,
+/// payment, refund, or ticket identifier: a receipt records that an operation
+/// ran, never what it decided.
+model JobDeliveryReceipt {
+  messageId     String                @id @db.VarChar(128)
+  job           String                @db.VarChar(64)
+  environment   String                @db.VarChar(32)
+  receivedAt    DateTime              @default(now()) @db.Timestamptz(3)
+  completedAt   DateTime?             @db.Timestamptz(3)
+  outcome       ServerlessJobOutcome?
+  attemptCount  Int                   @default(1)
+  safeErrorCode String?               @db.VarChar(80)
+  durationMs    Int?
+
+  @@index([job, receivedAt])
+  @@index([receivedAt])
+}
+
 /// Phase 5C1 worker liveness. Readiness derives staleness from lastSeenAt, so a
 /// crashed process becomes visible without any Redis dependency. Rows carry no
 /// secret, connection string, hostname, or process command line: instanceLabel

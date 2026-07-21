@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
+import { EnvironmentBanner } from "@/components/layout/environment-banner";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
 import { SITE_CONFIG } from "@/config/site";
@@ -49,6 +50,7 @@ export default function RootLayout({
         >
           Skip to content
         </a>
+        <EnvironmentBanner />
         <SiteHeader />
         <main id="main-content" className="flex-1">
           {children}

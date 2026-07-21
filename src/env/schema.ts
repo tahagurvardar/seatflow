@@ -4,6 +4,8 @@ import { z } from "zod";
 // Prisma CLI, which does not resolve the `@/` tsconfig alias, so an aliased
 // import here breaks every Prisma command.
 import { isIsolatedE2EMode } from "../features/operations/e2e-test-mode";
+import { isStagingDemoMode } from "../features/operations/deployment-profile";
+import { parseSenderAddress } from "../features/notifications/sender-address";
 
 type EnvironmentSource = Record<string, string | undefined>;
 
@@ -21,11 +23,29 @@ const redisUrlSchema = z
     "must use the redis:// or rediss:// protocol",
   );
 
+/**
+ * Accepts a bare address or a display-name mailbox. Only senders may carry a
+ * display name; recipient validation is unchanged and remains strict.
+ */
+const senderAddressSchema = z
+  .string()
+  .max(320)
+  .refine(
+    (value) => parseSenderAddress(value) !== null,
+    "must be an email address, optionally as: Display Name <address@example.com>",
+  );
+
 const applicationEnvironmentSchema = z.object({
   DATABASE_URL: postgresUrlSchema,
   DIRECT_URL: postgresUrlSchema.optional(),
   BETTER_AUTH_SECRET: z.string().min(32, "must contain at least 32 characters"),
   BETTER_AUTH_URL: z.url("must be a valid absolute URL"),
+  /**
+   * Browser-visible origin. Optional so existing single-origin setups keep
+   * working, but validated whenever it is present — an unparseable value here
+   * would otherwise surface as a broken absolute URL in an email.
+   */
+  NEXT_PUBLIC_APP_URL: z.url("must be a valid absolute URL").optional(),
 });
 
 const testDatabaseEnvironmentSchema = z.object({
@@ -94,6 +114,16 @@ const inventoryEventEnvironmentSchema = z.object({
     .min(1)
     .max(100)
     .default(10),
+
+  // ---- Phase 5C2B: Upstash REST transport ---------------------------------
+  // Optional companion to REDIS_URL. A serverless request path prefers REST
+  // because it needs no socket lifecycle, while BullMQ and the realtime
+  // gateway continue to require the TCP URL above.
+  UPSTASH_REDIS_REST_URL: z
+    .url("must be a valid URL")
+    .refine((value) => value.startsWith("https://"), "must use https://")
+    .optional(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().min(16).max(512).optional(),
 });
 
 /**
@@ -154,13 +184,19 @@ const createPaymentEnvironmentSchema = (source: EnvironmentSource) => z
     if (
       environment.NODE_ENV === "production" &&
       environment.PAYMENT_PROVIDER === "LOCAL_SIGNED" &&
-      // The single, audited exception: a demonstrably isolated E2E harness.
-      // Browser verification must run against a production build, which sets
-      // NODE_ENV=production; every condition in `evaluateIsolatedE2EMode` has
-      // to hold for the simulated provider to be permitted there. A real
-      // production deployment fails those conditions, so this rule still
-      // forbids LOCAL_SIGNED for it.
-      !isIsolatedE2EMode(source)
+      // Two audited exceptions, both of which require *every* condition in
+      // their evaluator to hold — a flag alone grants neither.
+      //
+      //  1. A demonstrably isolated E2E harness. Browser verification must run
+      //     against a production build, which sets NODE_ENV=production.
+      //  2. A demonstrably isolated staging demo: a vercel.app (or declared
+      //     staging) origin, no Stripe credentials, no live provider mode, and
+      //     no production-launch marker.
+      //
+      // A real production deployment fails both sets of conditions, so this
+      // rule still forbids LOCAL_SIGNED for it.
+      !isIsolatedE2EMode(source) &&
+      !isStagingDemoMode(source)
     ) {
       context.addIssue({
         code: "custom",
@@ -248,8 +284,13 @@ const notificationEnvironmentSchema = z
 
     // ---- External Resend adapter (disabled unless NOTIFICATION_PROVIDER=RESEND)
     RESEND_API_KEY: z.string().min(20).max(200).optional(),
-    RESEND_FROM_ADDRESS: z.email().max(254).optional(),
-    RESEND_REPLY_TO_ADDRESS: z.email().max(254).optional(),
+    /**
+     * A sender is an RFC 5322 mailbox, so both `addr@example.com` and
+     * `SeatFlow <addr@example.com>` are accepted. Recipients stay strictly
+     * bare — see `assertSafeEmailAddress`.
+     */
+    RESEND_FROM_ADDRESS: senderAddressSchema.optional(),
+    RESEND_REPLY_TO_ADDRESS: senderAddressSchema.optional(),
     /** Deliberately has no default: the mode must be stated, never inferred. */
     RESEND_MODE: z.enum(["test", "live"]).optional(),
     /**
@@ -315,6 +356,83 @@ const notificationEnvironmentSchema = z
   });
 
 /**
+ * Phase 5C2B serverless job delivery.
+ *
+ * `worker` is the default and preserves every Phase 4B/5B/5C process exactly as
+ * it was: resident BullMQ workers, a realtime gateway, and cron-driven CLI
+ * dispatchers. `serverless` is the deliberate opt-in for a platform that cannot
+ * host a resident process, where the same bounded operations are triggered by
+ * signed QStash deliveries instead.
+ *
+ * The signing keys are required in serverless mode because an unsigned internal
+ * job endpoint is an unauthenticated remote trigger for inventory and financial
+ * work. There is no "unsigned but enabled" configuration.
+ */
+const serverlessJobEnvironmentSchema = z
+  .object({
+    SEATFLOW_JOB_MODE: z.enum(["worker", "serverless"]).default("worker"),
+
+    QSTASH_CURRENT_SIGNING_KEY: z.string().min(20).max(512).optional(),
+    QSTASH_NEXT_SIGNING_KEY: z.string().min(20).max(512).optional(),
+    /** Publishing token. Only the scheduling CLI needs it, never a request path. */
+    QSTASH_TOKEN: z.string().min(20).max(512).optional(),
+
+    /**
+     * Absolute origin QStash delivers to. Defaults to the application origin;
+     * set it only when the job endpoints are reachable on a different host.
+     */
+    SEATFLOW_INTERNAL_JOB_ORIGIN: z.url("must be a valid absolute URL").optional(),
+
+    /** A job body names an operation and a batch size. It is never large. */
+    JOB_REQUEST_MAX_BYTES: z.coerce.number().int().min(256).max(65_536).default(8_192),
+    /**
+     * Bounds the handler well inside the platform's function limit, so a batch
+     * is cut short by this budget rather than killed mid-transaction by the
+     * runtime. Vercel Hobby allows 60s; the default leaves headroom.
+     */
+    JOB_MAX_DURATION_SECONDS: z.coerce.number().int().min(5).max(300).default(45),
+    /** Tolerance for clock skew when verifying a signature's validity window. */
+    JOB_CLOCK_TOLERANCE_SECONDS: z.coerce.number().int().min(0).max(300).default(15),
+    /** Deliveries older than this are refused outright as replays. */
+    JOB_REPLAY_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  })
+  .superRefine((environment, context) => {
+    if (environment.SEATFLOW_JOB_MODE !== "serverless") return;
+    for (const name of ["QSTASH_CURRENT_SIGNING_KEY", "QSTASH_NEXT_SIGNING_KEY"] as const) {
+      if (!environment[name]) {
+        context.addIssue({
+          code: "custom",
+          path: [name],
+          message:
+            "is required when SEATFLOW_JOB_MODE is serverless; an unsigned job endpoint is an unauthenticated remote trigger",
+        });
+      }
+    }
+    if (
+      environment.QSTASH_CURRENT_SIGNING_KEY &&
+      environment.QSTASH_CURRENT_SIGNING_KEY === environment.QSTASH_NEXT_SIGNING_KEY
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["QSTASH_NEXT_SIGNING_KEY"],
+        message: "must differ from QSTASH_CURRENT_SIGNING_KEY or rotation cannot work",
+      });
+    }
+  });
+
+export type ServerlessJobEnvironment = z.infer<typeof serverlessJobEnvironmentSchema>;
+
+export function readServerlessJobEnvironment(
+  source: EnvironmentSource = process.env,
+): ServerlessJobEnvironment {
+  const result = serverlessJobEnvironmentSchema.safeParse(source);
+  if (!result.success) {
+    throw formatEnvironmentError("SeatFlow serverless jobs", result.error);
+  }
+  return result.data;
+}
+
+/**
  * `z.coerce.boolean` treats the string "false" as true, which is exactly the
  * wrong default for a safety flag, so environment booleans are explicit.
  */
@@ -325,6 +443,18 @@ const booleanFlagSchema = z
 const operationsEnvironmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+    // ---- Phase 5C2B: which deployment this is -----------------------------
+    // Unset means production for a production build. Forgetting to declare a
+    // profile therefore fails closed into the strictest world, not the most
+    // permissive one. `profileCapabilities` decides what each may relax.
+    SEATFLOW_DEPLOYMENT_PROFILE: z
+      .enum(["local", "isolated-e2e", "staging-demo", "production"])
+      .optional(),
+    /** A non-vercel.app host the staging demo is additionally allowed to serve. */
+    SEATFLOW_STAGING_ORIGIN: z.url("must be a valid absolute URL").optional(),
+    /** Explicit marker for a deployment intending to serve real customers. */
+    SEATFLOW_PRODUCTION_LAUNCH: booleanFlagSchema.optional(),
 
     // Observability
     SEATFLOW_SERVICE_NAME: z

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import { Resend } from "resend";
 
+import { assertSafeSenderAddress } from "@/features/notifications/sender-address";
 import {
   assertSafeEmailAddress,
   validateOutgoingMessage,
@@ -65,8 +66,9 @@ export class ResendNotificationProvider implements NotificationProvider {
     private readonly configuration: ResendProviderConfiguration,
     client?: Resend,
   ) {
-    assertSafeEmailAddress(configuration.fromAddress);
-    if (configuration.replyToAddress) assertSafeEmailAddress(configuration.replyToAddress);
+    // Senders are mailboxes and may carry a display name; recipients may not.
+    assertSafeSenderAddress(configuration.fromAddress);
+    if (configuration.replyToAddress) assertSafeSenderAddress(configuration.replyToAddress);
     if (configuration.mode === "test") {
       if (!configuration.testRecipient) {
         throw new Error("Resend test mode requires an approved test recipient.");

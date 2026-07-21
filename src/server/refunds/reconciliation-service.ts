@@ -352,6 +352,44 @@ export async function raiseDivergenceForReview(
 }
 
 /**
+ * Raise the ticket-revocation backlog for human review.
+ *
+ * Deliberately escalation, not repair. `revokeTicket` requires an authorized
+ * actor and writes an audit event naming them; a scheduled job has no actor,
+ * and inventing one would put a fabricated identity on a permanent audit record
+ * for an action that invalidates someone's admission. So the backlog is raised
+ * through the same financial-outbox path divergences use and a person acts on
+ * it.
+ *
+ * The deduplication key is stable per booking, so repeated runs over an
+ * unresolved backlog produce one event, not a stream of them.
+ */
+export async function escalateTicketRevocationBacklog(
+  database: PrismaClient,
+  backlog: ReadonlyArray<{ bookingId: string; activeTickets: number }>,
+  now = new Date(),
+) {
+  let raised = 0;
+  for (const entry of backlog) {
+    const created = await runInTransaction(database, async (transaction) =>
+      enqueueFinancialEvent(transaction, {
+        eventType: "FINANCIAL_RECONCILIATION_REQUIRED",
+        deduplicationKey: `ticket-revocation-backlog:${entry.bookingId}`,
+        aggregateId: entry.bookingId,
+        bookingId: entry.bookingId,
+        payload: {
+          reason: "REFUNDED_BOOKING_HAS_ACTIVE_TICKET",
+          activeTickets: entry.activeTickets,
+        },
+        now,
+      }),
+    );
+    if (created) raised += 1;
+  }
+  return raised;
+}
+
+/**
  * Make eligible notification failures retryable again. Dead-lettered rows are
  * deliberately left alone: they failed permanently and need a human.
  */

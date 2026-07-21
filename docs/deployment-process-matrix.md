@@ -1,8 +1,22 @@
 # SeatFlow deployment process matrix
 
-SeatFlow is a modular monolith plus separate long-lived worker processes. A
-serverless-only deployment is insufficient: the dispatcher, expiry worker, and
-Socket.IO gateway all require persistent hosts.
+SeatFlow is a modular monolith plus separate long-lived worker processes.
+
+Since Phase 5C2B there are **two supported deployment shapes**, selected by
+`SEATFLOW_JOB_MODE`:
+
+| | `worker` (default) | `serverless` |
+|---|---|---|
+| Scheduled work | resident BullMQ workers, cron CLI | signed QStash deliveries |
+| Realtime | Socket.IO gateway | polling fallback |
+| Hosting | persistent hosts | Vercel Hobby or similar |
+| Intended for | local development, **real production** | the free staging demo |
+
+The worker shape remains the production-grade one and is unchanged. The
+serverless shape exists because a free platform cannot host a resident process;
+it accepts a real reduction in realtime quality in exchange, and is documented as
+a demo rather than as a production topology. See
+[phase-5c2b-free-staging.md](./phase-5c2b-free-staging.md).
 
 ## Process matrix
 
@@ -140,3 +154,63 @@ None can settle a refund, create a dispute, reopen inventory, or rewrite history
 ### Verification status
 
 Stripe and Resend adapters compile and are type-checked but have **not** been verified against real sandbox credentials, which are absent from this environment. No real-money charge and no real customer email has occurred. A sanitized production-like `production:check` reports no findings, which validates that the configuration rules are satisfiable — it is **not** provider verification. Sandbox, staging, and launch are Phase 5C2B.
+
+## Phase 5C2B additions
+
+### Serverless job matrix
+
+Applies only when `SEATFLOW_JOB_MODE=serverless`. Each entry replaces a resident
+process from the table above with a signed HTTP delivery to
+`POST /api/internal/jobs/<job>`.
+
+| Job | Replaces | Cadence | Heartbeat |
+|---|---|---|---|
+| `inventory-outbox-dispatch` | inventory dispatcher | 2 min | `INVENTORY_OUTBOX_DISPATCHER` |
+| `hold-expiry-sweep` | hold expiry worker | 2 min | `HOLD_EXPIRY_WORKER` |
+| `ticket-issuance-dispatch` | `tickets:issue` | 5 min | `TICKET_ISSUANCE_DISPATCHER` |
+| `notification-dispatch` | `notifications:dispatch` | 5 min | `NOTIFICATION_DISPATCHER` |
+| `refund-reconciliation` | `refunds:reconcile ambiguous` | hourly | `REFUND_RECONCILIATION` |
+| `stale-webhook-reconciliation` | `refunds:reconcile webhooks` | hourly | `PAYMENT_RECONCILIATION` |
+| `ticket-revocation-audit` | (new) escalation only | hourly | `FINANCIAL_OUTBOX_DISPATCHER` |
+
+The realtime gateway has **no** serverless equivalent. Readiness knows this:
+`expectedWorkerTypes` omits it in serverless mode, so its absence is not reported
+as a missing worker and the environment does not sit permanently degraded.
+
+`SEATFLOW_DECLARED_WORKERS` still applies to worker-mode production only.
+
+### Profile-aware configuration checks
+
+`validateProductionConfiguration` is unchanged and still governs real production.
+`validateStagingDemoConfiguration` is a **separate** function with several
+inverted rules — it requires `LOCAL_SIGNED` and `RESEND_MODE=test` where
+production refuses both.
+
+They are separate deliberately. Threading a profile flag through the production
+validator would give every production rule a branch that could be wrong, and the
+one failure that matters — a real deployment taking a staging exemption — would
+become possible. Real production never calls the staging function.
+
+### Migration
+
+One additive migration, `20260720000000_phase_5c2b_serverless_job_delivery`: one
+enum and one table (`JobDeliveryReceipt`). It touches no financial, inventory,
+booking, or ticket state. `EXPECTED_LATEST_MIGRATION` in
+`src/server/operations/readiness.ts` is updated to match, so a deployment whose
+database is behind fails readiness with `database_behind_code`.
+
+### New operational commands
+
+| Command | Network effect | Confirmation |
+|---|---|---|
+| `npm run staging:secrets -- check\|list` | none | none |
+| `npm run staging:secrets -- import` | writes Vercel env | typed `yes` |
+| `npm run staging:migrate -- status` | reads Neon | none |
+| `npm run staging:migrate -- deploy` | migrates Neon | typed `yes` or marker file |
+| `npm run staging:schedule -- list` | none | none |
+| `npm run staging:schedule -- apply\|remove` | writes QStash | typed `yes` |
+| `npm run staging:seed` | writes Neon | typed `yes` |
+| `npm run staging:verify:email` | sends one email | typed `yes` |
+
+None prints a secret value. None is reachable from a build, a deployment, or a
+test suite.
