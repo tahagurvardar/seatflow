@@ -34,9 +34,17 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
+# The `.env*` pattern already covers .env.staging.local; the templates are the
+# only environment files that may ever be tracked, and they hold placeholders.
 .env*
 !.env.example
+!.env.staging.example
 tmp/seatflow-mail/
+
+# Phase 5C2B staging authorization marker. Its presence lets the migration
+# command skip its confirmation prompt, so it is a local operator decision and
+# must never be shared through the repository.
+.staging-migration-authorized
 
 # Phase 5C1 operational artifacts.
 # Backups contain complete customer, payment, and ticket data; load-test and
@@ -61,6 +69,12 @@ accessibility-report-*.json
 # Structured log capture
 *.log
 /logs/
+
+# Local Redis snapshot/append files. A dev Redis server writes these into its
+# working directory; they are runtime state, never source.
+*.rdb
+*.aof
+dump.rdb
 
 # vercel
 .vercel

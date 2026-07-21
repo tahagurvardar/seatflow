@@ -4,12 +4,15 @@ import {
   readOperationsEnvironment,
   readOptionalInventoryEventEnvironment,
   readPaymentEnvironment,
+  readServerlessJobEnvironment,
   readTicketEnvironment,
 } from "@/env/schema";
+import { resolveDeploymentProfile } from "@/features/operations/deployment-profile";
 import {
   decideReadiness,
   evaluateBacklog,
   evaluateDeadLetters,
+  expectedWorkerTypes,
   redisRequiredForRole,
   workerLabelToCheckStatus,
   type ProcessRole,
@@ -34,7 +37,7 @@ import { checkDistributedRateLimitAvailable } from "@/server/security/rate-limit
  * behind it, which catches the dangerous deployment ordering where new code
  * reaches production before its migration has been applied.
  */
-export const EXPECTED_LATEST_MIGRATION = "20260719000000_phase_5c1_worker_heartbeats";
+export const EXPECTED_LATEST_MIGRATION = "20260720000000_phase_5c2b_serverless_job_delivery";
 
 const PROBE_TIMEOUT_MS = 2_000;
 
@@ -147,6 +150,9 @@ function checkProviderConfiguration(): ReadinessCheck[] {
 export interface ReadinessReport {
   status: ReadinessStatus;
   role: ProcessRole;
+  /** Which world this deployment is. Non-secret and safe to report. */
+  profile: string;
+  jobMode: "worker" | "serverless";
   checkedAt: string;
   checks: ReadinessCheck[];
 }
@@ -158,6 +164,15 @@ export async function evaluateReadiness(
   const now = input.now ?? new Date();
   const operations = readOperationsEnvironment();
   const role = input.role ?? "web";
+  const profile = resolveDeploymentProfile(process.env);
+  // Readiness must answer even when job configuration is incomplete, so an
+  // unparseable serverless section degrades to worker mode rather than throwing.
+  let serverlessJobs;
+  try {
+    serverlessJobs = readServerlessJobEnvironment();
+  } catch {
+    serverlessJobs = { SEATFLOW_JOB_MODE: "worker" as const };
+  }
 
   const checks: ReadinessCheck[] = [];
   const databaseCheck = await checkDatabase(database);
@@ -169,6 +184,8 @@ export async function evaluateReadiness(
     return {
       status: "not_ready",
       role,
+      profile,
+      jobMode: serverlessJobs.SEATFLOW_JOB_MODE,
       checkedAt: now.toISOString(),
       checks: [...checks, ...checkProviderConfiguration()],
     };
@@ -220,7 +237,14 @@ export async function evaluateReadiness(
     ...(notificationDeadLetters > 0 ? { detail: "present" } : {}),
   });
 
+  // A serverless deployment has no realtime gateway process, so its absence is
+  // expected rather than a fault. Reporting it as missing would leave readiness
+  // permanently degraded, and a signal that is always yellow gets ignored.
+  const expected = new Set(
+    expectedWorkerTypes({ jobMode: serverlessJobs.SEATFLOW_JOB_MODE }),
+  );
   for (const worker of workers) {
+    if (!expected.has(worker.workerType)) continue;
     checks.push({
       name: `worker_${worker.workerType.toLowerCase()}`,
       status: workerLabelToCheckStatus(worker.label),
@@ -241,6 +265,8 @@ export async function evaluateReadiness(
   return {
     status: decideReadiness(checks),
     role,
+    profile,
+    jobMode: serverlessJobs.SEATFLOW_JOB_MODE,
     checkedAt: now.toISOString(),
     checks,
   };

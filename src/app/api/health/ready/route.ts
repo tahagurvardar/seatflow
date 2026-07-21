@@ -42,6 +42,8 @@ export async function GET() {
       ? {
           status: report.status,
           role: report.role,
+          profile: report.profile,
+          jobMode: report.jobMode,
           checkedAt: report.checkedAt,
           checks: report.checks,
         }

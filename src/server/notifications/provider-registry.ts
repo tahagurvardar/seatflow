@@ -7,6 +7,11 @@ import { ResendNotificationProvider } from "@/server/notifications/resend-provid
  * Notification adapter selection. As with payments, an external adapter is
  * built only when it is explicitly selected and fully configured, so a stray
  * API key in the environment can never start sending real email.
+ *
+ * This is the **local and CLI** registry: it includes the development
+ * `LOCAL_FILE` adapter, which writes captured mail to disk. A deployed
+ * serverless function must not reach it — see `deployed-provider-registry.ts`
+ * for why — so route handlers use that module instead.
  */
 export function createNotificationProvider(
   environment: NotificationEnvironment,

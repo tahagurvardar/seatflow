@@ -25,8 +25,8 @@ const steps: ReadonlyArray<{
   },
   {
     number: "03",
-    title: "Preview the room",
-    description: "Review the configured section layout; seat selection and checkout arrive in later phases.",
+    title: "Choose your seats",
+    description: "Pick seats on the live map and complete a simulated checkout — this demo takes no real payment.",
     icon: "ticket",
   },
 ];
@@ -86,8 +86,9 @@ export function OrganizerSection() {
             </h2>
             <p className="mt-5 max-w-xl text-sm leading-6 text-orange-50 sm:text-base">
               Publish persistent events and priced sessions against venues that
-              have explicitly approved your organization. Booking, payments,
-              reporting, and team invitations remain on the roadmap.
+              have explicitly approved your organization, then manage bookings,
+              digital tickets, and reporting. Checkout in this demo is simulated —
+              no money moves.
             </p>
           </div>
           <div className="relative mt-8 lg:mt-0">
@@ -114,7 +115,7 @@ export function TrustSection() {
     {
       icon: "shield" as const,
       title: "Trust by design",
-      description: "Clear states and honest product language—especially before checkout exists.",
+      description: "Clear states and honest product language — checkout here is simulated and takes no real payment.",
     },
     {
       icon: "users" as const,

@@ -4,6 +4,7 @@ import {
   CORRELATION_HEADER,
   correlationIdFromHeaders,
 } from "@/features/observability/correlation";
+import { resolveRealtimeEndpoint } from "@/features/inventory-events/realtime-endpoint";
 import {
   buildSecurityHeaders,
   isSensitivePath,
@@ -64,13 +65,20 @@ export function proxy(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
 
   const securityHeadersEnabled = process.env.SECURITY_HEADERS_ENABLED !== "false";
+  // Resolve the realtime origin the same hosted-aware way the seat pages do, so
+  // a build that inlined a loopback NEXT_PUBLIC_REALTIME_URL never reaches the
+  // policy on a hosted deployment. A hosted deployment with no real gateway
+  // resolves to the polling fallback and contributes no connect-src origin.
+  const realtime = resolveRealtimeEndpoint(process.env, {
+    hosted: process.env.NODE_ENV === "production",
+  });
   const headers = securityHeadersEnabled
     ? buildSecurityHeaders({
         nonce,
         isDevelopment: process.env.NODE_ENV === "development",
         isHttps: isHttpsRequest(request),
         hstsMaxAgeSeconds: readHstsMaxAge(),
-        realtimeOrigin: process.env.NEXT_PUBLIC_REALTIME_URL ?? null,
+        realtimeOrigin: realtime.mode === "socket" ? realtime.url : null,
       })
     : {};
 

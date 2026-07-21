@@ -14,8 +14,8 @@ export function OrganizerInventorySummary({
         <h2 className="text-xl font-black text-slate-950">Live inventory</h2>
         <p className="mt-1 text-sm text-slate-600">
           Read-only availability from the authoritative session inventory. Holds are
-          temporary reservations awaiting checkout in a later phase — never sales, and
-          no customer identities are shown.
+          temporary reservations awaiting checkout — never sales, and no customer
+          identities are shown.
         </p>
       </div>
 

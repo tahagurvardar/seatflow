@@ -239,3 +239,62 @@ Reconciliation may only adopt an external refund the provider already created un
 ### Test-only browser fixture
 
 `tests/browser/seed.ts` creates synthetic accounts through Better Auth's own server API, so real password hashing and the real session mechanism are used. Playwright then signs in through the real login form; nothing forges a session or fakes a logged-in front-end state. The database target resolves through `readSafeTestDatabaseUrl`, which refuses anything that is not a clearly-marked test database, so the development database is unreachable from that path. Browser verification runs against a production build, because the dev server injects a hot-reload socket and a dev-tools portal that make "no console errors" unverifiable.
+
+## Phase 5C2B — serverless job delivery and deployment profiles
+
+### Two triggers, one set of operations
+
+The Phase 4B/5B/5C worker architecture is unchanged. `SEATFLOW_JOB_MODE`
+selects how the same bounded operations are *triggered*:
+
+```
+worker mode                            serverless mode
+───────────                            ───────────────
+BullMQ scheduler                       QStash cron schedule
+  → resident Worker process              → signed HTTPS delivery
+    → sweepExpiredHolds(db)                → /api/internal/jobs/<job>
+                                             → verify signature (raw bytes)
+                                             → claim delivery receipt
+                                             → sweepExpiredHolds(db)
+```
+
+This was only possible because the operations were already bounded, idempotent,
+one-shot functions with BullMQ acting purely as a scheduler around them. No
+business logic changed, and there is no second implementation of anything.
+
+`src/server/jobs/job-registry.ts` maps each job name to the existing service
+function plus a `WorkerType` for heartbeats, so a serverless run and a worker run
+are directly comparable in readiness.
+
+### Deployment profiles
+
+`src/features/operations/deployment-profile.ts` classifies the running
+deployment as `local`, `isolated-e2e`, `staging-demo`, or `production`, and
+`profileCapabilities` centralizes what each may relax. An undeclared profile on a
+production build resolves to `production`, so forgetting to declare one fails
+closed into the strictest world rather than the most permissive.
+
+`staging-demo` is granted the same way `isolated-e2e` is: a pure evaluator where
+every condition must hold and the first failure is returned by name. A claimed
+but invalid staging demo is classified as **production**, not downgraded.
+
+### Redis transports
+
+`transport-factory.ts` selects between Upstash REST (preferred on serverless — no
+socket lifecycle, so concurrent isolates cannot exhaust a connection limit), a
+lazily created module-scoped TCP connection (required by BullMQ and the realtime
+gateway), and an explicit unavailable transport.
+
+The unavailable transport **throws**. That is deliberate: the outbox dispatcher
+marks a row processed only if `publish` resolved, so a transport that returned
+success would mark it processed and lose the invalidation permanently.
+
+### Realtime
+
+`realtime-endpoint.ts` resolves whether a socket exists at all. On a hosted
+deployment a loopback gateway URL is refused — it would point every visitor's
+browser at their own machine — and the client starts in authoritative polling
+instead, which the Phase 4B hook already supported through an empty URL.
+
+PostgreSQL is authoritative in both modes. The socket only says "something
+changed, ask again"; polling asks on a timer.

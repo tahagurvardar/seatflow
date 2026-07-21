@@ -12,6 +12,7 @@ import { Container } from "@/components/ui/container";
 import { ROUTES } from "@/config/site";
 import { getServerEnvironment } from "@/env/server";
 import { formatVenueDateTime } from "@/features/events/date-time";
+import { realtimeUrlForClient } from "@/features/inventory-events/realtime-endpoint";
 import { createRealtimeRoomTicket } from "@/features/inventory-events/room-ticket";
 import { hasMinimumMembershipRole } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
@@ -40,7 +41,7 @@ export default async function OrganizerSessionPage({ params, searchParams }: { p
   const canScan = hasMinimumMembershipRole(membership.role, "ADMIN");
   const action = sessionLifecycleAction.bind(null, scope);
   const realtimeTicket = createRealtimeRoomTicket({ sessionId: scope.sessionId, secret: getServerEnvironment().BETTER_AUTH_SECRET });
-  const realtimeUrl = process.env.NEXT_PUBLIC_REALTIME_URL ?? "http://localhost:3001";
+  const realtimeUrl = realtimeUrlForClient(process.env, { hosted: process.env.NODE_ENV === "production" });
 
   return <section className="bg-slate-50 py-12 sm:py-16"><Container className="max-w-[96rem]">
     <nav className="text-sm text-slate-500"><Link href={ROUTES.organizerEvent(scope.organizationSlug, scope.eventSlug)} className="hover:text-slate-950">{event.title}</Link> / Session</nav>

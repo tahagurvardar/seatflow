@@ -15,6 +15,9 @@ export default defineConfig({
       "tests/notification/**",
       "tests/pdf/**",
       "tests/redis/**",
+      // Server modules import `server-only`, which throws in this jsdom
+      // environment by design. They run under vitest.server.config.mts.
+      "tests/server/**",
       "node_modules/**",
     ],
     coverage: {

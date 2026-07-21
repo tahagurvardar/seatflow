@@ -219,7 +219,8 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             </p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
               Prices and section coverage are persisted. Choose seats to place a
-              temporary hold; checkout and payment arrive in Phase 5.
+              temporary hold, then complete a simulated checkout — no real
+              payment is taken.
             </p>
             {primarySellableSession ? (
               <Link
@@ -242,8 +243,9 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
               </button>
             )}
             <div id="seat-selection-note" className="mt-4 rounded-2xl bg-amber-50 p-4 text-xs leading-5 text-amber-900">
-              Holding seats reserves them for a short time. No payment is taken and no
-              ticket is issued in Phase 4A.
+              Holding seats reserves them for a short time. Checkout is simulated —
+              no real payment is taken — and a confirmed booking issues secure
+              digital tickets.
             </div>
           </aside>
         </Container>
