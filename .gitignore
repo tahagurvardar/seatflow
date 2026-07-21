@@ -79,6 +79,12 @@ dump.rdb
 # vercel
 .vercel
 
+# Editor and assistant tooling. Local developer preference, never source.
+.claude/
+.cursor/
+.idea/
+.vscode/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
