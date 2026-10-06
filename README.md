@@ -34,6 +34,15 @@ non-dismissible banner.
 - Demo account passwords are **not** published here. They live only in an
   ignored local file chosen by the environment's owner.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Homepage](docs/assets/screenshots/homepage.png) | ![Event discovery](docs/assets/screenshots/events-discovery.png) |
+| **Homepage** — public programme, demo banner | **Discovery** — search, category, city, sort |
+| ![Event and session](docs/assets/screenshots/event-session.png) | ![Seat selection](docs/assets/screenshots/seat-selection.png) |
+| **Event** — session, venue, representative pricing | **Seat selection** — live map, PostgreSQL authority |
+
 ## Architecture
 
 Next.js App Router (React Server Components) with Server Actions for mutations,
@@ -148,15 +157,6 @@ is visible in readiness.
 - Tenant isolation verified by browser tests, including URL-manipulation attempts
 - Secrets never printed by any command; staging tooling reports variable **names** and status only
 - Deployment gates that fail closed, and a production check that rejects the E2E flag outright
-
-## Screenshots
-
-| | |
-|---|---|
-| ![Homepage](docs/assets/screenshots/homepage.png) | ![Event discovery](docs/assets/screenshots/events-discovery.png) |
-| **Homepage** — public programme, demo banner | **Discovery** — search, category, city, sort |
-| ![Event and session](docs/assets/screenshots/event-session.png) | ![Seat selection](docs/assets/screenshots/seat-selection.png) |
-| **Event** — session, venue, representative pricing | **Seat selection** — live map, PostgreSQL authority |
 
 ## Test totals
 
