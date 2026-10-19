@@ -61,7 +61,15 @@ export function HoldCountdown({
 
   if (remaining <= 0) {
     return (
-      <span role="status" className={cn("font-black text-red-700", className)}>
+      // Inside the dark customer theme the light-theme red fails contrast
+      // (2.6:1), so the scoped danger token is used there instead.
+      <span
+        role="status"
+        className={cn(
+          "font-black text-red-700 in-data-[theme-scope=customer]:text-[var(--sf-danger)]",
+          className,
+        )}
+      >
         Confirming with server…
       </span>
     );

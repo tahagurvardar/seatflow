@@ -5,13 +5,20 @@ import { io, type Socket } from "socket.io-client";
 
 import {
   decideInventoryEvent,
+  initialConnectionState,
   type InventoryEventCursor,
+  nextConnectionState,
+  REALTIME_RECONNECT_GRACE_MS,
+  type RealtimeConnectionSignal,
   type RealtimeConnectionState,
+  usesTimedRefresh,
 } from "@/features/inventory-events/delivery";
 import { inventoryEventPayloadSchema } from "@/features/inventory-events/event";
+import { DEFAULT_POLL_INTERVAL_MS } from "@/features/inventory-events/realtime-endpoint";
 
 export type AuthoritativeRefreshReason =
   | "event"
+  | "connect"
   | "reconnect"
   | "focus"
   | "fallback"
@@ -25,8 +32,12 @@ interface InventoryInvalidationInput {
 }
 
 export function useInventoryInvalidation(input: InventoryInvalidationInput) {
-  const [connectionState, setConnectionState] =
-    useState<RealtimeConnectionState>(input.realtimeUrl ? "connecting" : "fallback");
+  const [connectionState, setConnectionState] = useState<RealtimeConnectionState>(
+    () => initialConnectionState(input.realtimeUrl),
+  );
+  const signal = useCallback((next: RealtimeConnectionSignal) => {
+    setConnectionState((current) => nextConnectionState(current, next));
+  }, []);
   const socketRef = useRef<Socket | null>(null);
   const ticketRef = useRef(input.initialTicket);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -70,19 +81,17 @@ export function useInventoryInvalidation(input: InventoryInvalidationInput) {
       timeout: 5_000,
     });
     socketRef.current = socket;
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    // The first successful connection is not a recovery; only later ones are.
+    let hasConnected = false;
 
     socket.on("connect", () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      setConnectionState("live");
-      void refresh("reconnect");
+      signal("connected");
+      void refresh(hasConnected ? "reconnect" : "connect");
+      hasConnected = true;
     });
-    socket.on("disconnect", () => {
-      setConnectionState("reconnecting");
-      fallbackTimer = setTimeout(() => setConnectionState("fallback"), 5_000);
-    });
-    socket.on("connect_error", () => setConnectionState("fallback"));
-    socket.io.on("reconnect_attempt", () => setConnectionState("reconnecting"));
+    socket.on("disconnect", () => signal("disconnected"));
+    socket.on("connect_error", () => signal("connect_error"));
+    socket.io.on("reconnect_attempt", () => signal("reconnect_attempt"));
     socket.on("inventory:transport-state", (rawState: unknown) => {
       if (
         typeof rawState !== "object" ||
@@ -91,9 +100,9 @@ export function useInventoryInvalidation(input: InventoryInvalidationInput) {
       ) {
         return;
       }
-      if (rawState.state === "fallback") setConnectionState("fallback");
+      if (rawState.state === "fallback") signal("transport_fallback");
       if (rawState.state === "live") {
-        setConnectionState("live");
+        signal("transport_live");
         void refresh("reconnect");
       }
     });
@@ -106,13 +115,21 @@ export function useInventoryInvalidation(input: InventoryInvalidationInput) {
     });
 
     return () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
       socket.removeAllListeners();
       socket.io.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [input.realtimeUrl, input.sessionId, refresh]);
+  }, [input.realtimeUrl, input.sessionId, refresh, signal]);
+
+  // The grace timer starts when the socket enters a (re)connecting state and is
+  // cancelled by any transition out of it. Repeated retry signals do not change
+  // the state, so they cannot restart or shorten the grace period.
+  useEffect(() => {
+    if (connectionState !== "connecting" && connectionState !== "reconnecting") return;
+    const timer = window.setTimeout(() => signal("grace_expired"), REALTIME_RECONNECT_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [connectionState, signal]);
 
   useEffect(() => {
     const onFocus = () => void refresh("focus");
@@ -121,8 +138,8 @@ export function useInventoryInvalidation(input: InventoryInvalidationInput) {
   }, [refresh]);
 
   useEffect(() => {
-    if (connectionState !== "fallback") return;
-    const interval = window.setInterval(() => void refresh("fallback"), 30_000);
+    if (!usesTimedRefresh(connectionState)) return;
+    const interval = window.setInterval(() => void refresh("fallback"), DEFAULT_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [connectionState, refresh]);
 

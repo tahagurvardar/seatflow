@@ -20,8 +20,10 @@ export function InventoryConnectionStatus({
       )}
       role="status"
       aria-live="polite"
+      data-connection-state={state}
     >
       <span
+        aria-hidden="true"
         className={cn(
           "size-2 rounded-full",
           view.tone === "success" && "bg-emerald-500",
@@ -30,6 +32,7 @@ export function InventoryConnectionStatus({
         )}
       />
       {view.label}
+      <span className="sr-only">. {view.description}</span>
     </div>
   );
 }

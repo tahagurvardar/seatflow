@@ -22,6 +22,14 @@ import {
   createRedisInventoryFixture,
   createRedisTestCustomer,
 } from "../redis/inventory-fixture";
+import { summarizeBookingPayment } from "../../src/features/bookings/payment-summary";
+import { deriveTicketCredential } from "../../src/features/tickets/credential";
+import { ticketPdfAvailability } from "../../src/features/tickets/lifecycle";
+import { getCustomerBookingByReference } from "../../src/server/payments/booking-queries";
+import { listCustomerBookingTickets } from "../../src/server/tickets/ticket-queries";
+import { createBookingPdfGrant } from "../../src/server/tickets/download-grant-service";
+import { renderCustomerTicketQr } from "../../src/server/tickets/qr-service";
+import { validateTicketEntry } from "../../src/server/tickets/validation-service";
 import { resetIntegrationDatabase } from "./reset-database";
 
 let database: PrismaClient;
@@ -657,6 +665,144 @@ describe("Phase 5C2A verified refund webhook settlement", () => {
       select: { id: true, state: true },
     });
     expect(inventoryAfter).toEqual(inventoryBefore);
+  });
+
+  it("rejects refunded credentials at entry and withholds their QR and PDF without rewriting history", async () => {
+    const context = await setupSubmittedRefund("refundscan");
+    const issued = await database.ticket.findMany({
+      where: { bookingId: context.booking.id },
+      include: { credentials: { where: { status: "ACTIVE" } } },
+    });
+    // Without issued tickets every loop below would pass vacuously.
+    expect(issued).toHaveLength(context.booking.seats.length);
+    expect(issued.every((ticket) => ticket.credentials.length === 1)).toBe(true);
+    const plaintexts = issued.map((ticket) =>
+      deriveTicketCredential({
+        ticketReference: ticket.publicReference,
+        version: ticket.credentials[0]!.version,
+        secret: credentialSecret,
+      }),
+    );
+    await processPaymentWebhook(database, context.local, refundDelivery(context, "succeeded"));
+
+    for (const [index, credential] of plaintexts.entries()) {
+      const result = await validateTicketEntry(database, {
+        scannerUserId: context.fixture.organizerScope.userId,
+        sessionId: context.fixture.session.id,
+        credential,
+        credentialSecret,
+        earlyMinutes: 60 * 24 * 31,
+        lateMinutes: 60,
+        idempotencyKey: `refundscan${index}${"0".repeat(16)}`,
+      });
+      expect(result).toMatchObject({ outcome: "REVOKED", accepted: false });
+      expect(result.ticket?.reference).toBe(issued[index]!.publicReference);
+      expect(
+        await renderCustomerTicketQr(database, {
+          userId: context.customer.id,
+          ticketReference: issued[index]!.publicReference,
+          credentialSecret,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      await createBookingPdfGrant(database, {
+        userId: context.customer.id,
+        bookingId: context.booking.id,
+        credentialSecret,
+        ttlMinutes: 10,
+      }),
+    ).toBeNull();
+    // The booking and its tickets remain readable history, not deleted rows.
+    expect(await database.ticket.count({ where: { bookingId: context.booking.id } })).toBe(issued.length);
+    expect(await database.ticketRedemptionEvent.count({ where: { outcome: "REVOKED" } })).toBe(issued.length);
+    expect(await database.ticketRedemptionEvent.count({ where: { outcome: "ACCEPTED" } })).toBe(0);
+  });
+
+  it("exposes partial-refund figures and per-ticket state from the authoritative records", async () => {
+    const context = await setupPaidBooking("refundviewpartial");
+    const [firstSeat] = context.booking.seats;
+    const requested = await requestRefund(
+      database,
+      { userId: context.customer.id, role: "CUSTOMER" },
+      {
+        bookingReference: context.booking.publicReference,
+        scope: "SELECTED_SEATS",
+        bookingSeatIds: [firstSeat!.id],
+        reasonCode: "CUSTOMER_REQUEST",
+        idempotencyKey: "refund-view-partial-1",
+      },
+    );
+    await submitRefund(database, context.local, requested.refundId);
+    const refund = await database.refund.findUniqueOrThrow({ where: { id: requested.refundId } });
+
+    // In flight: nothing is subtracted yet.
+    const inFlight = await getCustomerBookingByReference(
+      database,
+      { userId: context.customer.id },
+      context.booking.publicReference,
+    );
+    expect(inFlight.payment).toEqual({
+      paidMinor: context.attempt.amountMinor,
+      refundedMinor: 0,
+      inFlightMinor: firstSeat!.priceMinor,
+    });
+    expect(summarizeBookingPayment({ bookingStatus: inFlight.status, figures: inFlight.payment })).toMatchObject({
+      refundState: "NONE",
+      refundInProgress: true,
+      netPaidMinor: context.attempt.amountMinor,
+    });
+
+    await processPaymentWebhook(
+      database,
+      context.local,
+      context.local.createSignedRefundWebhook({
+        providerIntentId: context.attempt.providerIntentId!,
+        providerRefundId: refund.providerRefundId!,
+        outcome: "succeeded",
+        amountMinor: refund.requestedAmountMinor,
+        currency: refund.currency,
+      }),
+    );
+
+    const settled = await getCustomerBookingByReference(
+      database,
+      { userId: context.customer.id },
+      context.booking.publicReference,
+    );
+    expect(settled.status).toBe("CONFIRMED");
+    expect(settled.payment).toEqual({
+      paidMinor: context.attempt.amountMinor,
+      refundedMinor: firstSeat!.priceMinor,
+      inFlightMinor: 0,
+    });
+    expect(summarizeBookingPayment({ bookingStatus: settled.status, figures: settled.payment })).toMatchObject({
+      refundState: "PARTIAL",
+      netPaidMinor: context.attempt.amountMinor - firstSeat!.priceMinor,
+    });
+
+    const tickets = await listCustomerBookingTickets(database, {
+      userId: context.customer.id,
+      bookingReference: context.booking.publicReference,
+    });
+    expect(tickets.map((ticket) => ticket.bookingStatus)).toEqual(["CONFIRMED", "CONFIRMED"]);
+    expect(tickets.map((ticket) => [ticket.status, ticket.revocationReason]).sort()).toEqual([
+      ["ACTIVE", null],
+      ["REVOKED", "REFUNDED"],
+    ]);
+    // The UI offers the PDF exactly when the server will grant it.
+    expect(
+      ticketPdfAvailability({ bookingStatus: settled.status, ticketStatuses: tickets.map((ticket) => ticket.status) })
+        .available,
+    ).toBe(true);
+    expect(
+      await createBookingPdfGrant(database, {
+        userId: context.customer.id,
+        bookingId: context.booking.id,
+        credentialSecret,
+        ttlMinutes: 10,
+      }),
+    ).not.toBeNull();
   });
 
   it("keeps a used ticket historically used while revoking the rest", async () => {

@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -106,6 +106,20 @@ const event: InventoryInvalidationEvent = {
 
 const noOpAction = vi.fn(async (): Promise<HoldActionState> => ({}));
 
+// M5.4 composition: map seats, the desktop selection rail and the connection
+// pill are queried directly (the page now has several polite status regions).
+function mapSeat(seatId: string) {
+  return document.querySelector<HTMLElement>(`[data-seat-id="${seatId}"]`)!;
+}
+
+function rail() {
+  return screen.getByRole("complementary", { name: "Your selection" });
+}
+
+function connectionStatus() {
+  return document.querySelector<HTMLElement>("[data-connection-state]")!;
+}
+
 function response(body: unknown) {
   return Promise.resolve({ ok: true, json: async () => body } as Response);
 }
@@ -130,11 +144,11 @@ afterEach(() => {
 describe("Phase 4B connection states", () => {
   it("renders live, reconnecting, and fallback labels honestly", () => {
     const { rerender } = render(<InventoryConnectionStatus state="live" />);
-    expect(screen.getByRole("status")).toHaveTextContent("Live");
+    expect(screen.getByRole("status")).toHaveTextContent("Live updates on");
     rerender(<InventoryConnectionStatus state="reconnecting" />);
-    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting");
+    expect(screen.getByRole("status")).toHaveTextContent("Reconnecting live updates");
     rerender(<InventoryConnectionStatus state="fallback" />);
-    expect(screen.getByRole("status")).toHaveTextContent(/refresh fallback/i);
+    expect(screen.getByRole("status")).toHaveTextContent("Live updates paused");
   });
 
   it("moves the realtime customer view through live and fallback transport state", async () => {
@@ -144,16 +158,15 @@ describe("Phase 4B connection states", () => {
         eventSlug="public-event"
         initialSections={availableSections}
         initialCounts={{ total: 2, available: 2, heldByYou: 0, unavailable: 0, blocked: 0 }}
-        currency="AZN"
         maxSeats={8}
         initialTicket="initial-ticket"
         realtimeUrl="http://localhost:3001"
       />,
     );
     act(() => socketHarness.current!.serverEmit("connect"));
-    expect(await screen.findByRole("status", { name: "" })).toHaveTextContent(/Live|reconnected/i);
+    await waitFor(() => expect(connectionStatus()).toHaveTextContent(/Live|reconnected/i));
     act(() => socketHarness.current!.serverEmit("inventory:transport-state", { state: "fallback" }));
-    expect(screen.getByText(/temporarily using refresh fallback/i)).toBeInTheDocument();
+    expect(screen.getByText("Live updates paused")).toBeInTheDocument();
   });
 });
 
@@ -173,19 +186,20 @@ describe("Phase 4B authoritative invalidation UI", () => {
         eventSlug="public-event"
         initialSections={availableSections}
         initialCounts={{ total: 2, available: 2, heldByYou: 0, unavailable: 0, blocked: 0 }}
-        currency="AZN"
         maxSeats={8}
         action={noOpAction}
         initialTicket="initial-ticket"
         realtimeUrl="http://localhost:3001"
       />,
     );
-    await user.click(screen.getByRole("button", { name: /seat 1, standard: available/i }));
+    await user.click(mapSeat("seat-1"));
+    expect(mapSeat("seat-1")).toHaveAttribute("aria-pressed", "true");
 
     act(() => socketHarness.current!.serverEmit("inventory:invalidated", event));
     expect(await screen.findByRole("alert")).toHaveTextContent(/no longer available.*removed/i);
-    expect(screen.getByText("0 of 8 seats selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /seat 1.*unavailable/i })).toBeDisabled();
+    expect(within(rail()).getByText(/0 of 8 seats selected/)).toBeInTheDocument();
+    expect(mapSeat("seat-1")).toHaveAccessibleName(/seat 1.*unavailable/i);
+    expect(mapSeat("seat-1")).toHaveAttribute("aria-disabled", "true");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     act(() => socketHarness.current!.serverEmit("inventory:invalidated", event));
@@ -228,15 +242,68 @@ describe("Phase 4B selection reconciliation component", () => {
   it("preserves still-available seats when a refreshed prop removes one selection", async () => {
     const user = userEvent.setup();
     const { rerender } = render(
-      <SelectableSeatMap sections={availableSections} maxSeats={8} currency="AZN" action={noOpAction} />,
+      <SelectableSeatMap sections={availableSections} maxSeats={8} action={noOpAction} />,
     );
-    await user.click(screen.getByRole("button", { name: /seat 1, standard: available/i }));
-    await user.click(screen.getByRole("button", { name: /seat 2, premium: available/i }));
+    await user.click(mapSeat("seat-1"));
+    await user.click(mapSeat("seat-2"));
     rerender(
-      <SelectableSeatMap sections={unavailableSections} maxSeats={8} currency="AZN" action={noOpAction} />,
+      <SelectableSeatMap sections={unavailableSections} maxSeats={8} action={noOpAction} />,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(/1 selected seat.*removed/i);
-    expect(screen.getByText("1 of 8 seats selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /seat 2, premium: available/i })).toHaveAttribute("aria-pressed", "true");
+    expect(within(rail()).getByText(/1 of 8 seats selected/)).toBeInTheDocument();
+    expect(mapSeat("seat-2")).toHaveAccessibleName(/seat 2, available, premium seat/i);
+    expect(mapSeat("seat-2")).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("v1.1 realtime notices", () => {
+  const counts = { total: 2, available: 2, heldByYou: 0, unavailable: 0, blocked: 0 };
+
+  function renderSelection(realtimeUrl = "http://localhost:3001") {
+    return render(
+      <RealtimeSeatSelection
+        sessionId="session-1"
+        eventSlug="public-event"
+        initialSections={availableSections}
+        initialCounts={counts}
+        maxSeats={8}
+        initialTicket="initial-ticket"
+        realtimeUrl={realtimeUrl}
+      />,
+    );
+  }
+
+  it("does not claim a reconnect on the first connection", async () => {
+    renderSelection();
+    act(() => socketHarness.current!.serverEmit("connect"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await act(async () => Promise.resolve());
+    expect(screen.queryByText(/reconnected/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Live updates on")).toBeInTheDocument();
+  });
+
+  it("announces a genuine reconnect after a lost connection", async () => {
+    renderSelection();
+    act(() => socketHarness.current!.serverEmit("connect"));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    act(() => socketHarness.current!.serverEmit("disconnect"));
+    expect(screen.getByText("Reconnecting live updates")).toBeInTheDocument();
+    act(() => socketHarness.current!.serverEmit("connect"));
+    expect(await screen.findByText(/live updates reconnected/i)).toBeInTheDocument();
+  });
+
+  it("clears a refresh failure once a later refresh succeeds, without technical wording", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError("Failed to fetch")));
+    renderSelection("");
+    expect(screen.getByText("Auto-refresh on")).toBeInTheDocument();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    const failure = await screen.findByText(/couldn't refresh seat availability/i);
+    expect(failure.textContent).not.toMatch(/postgres|redis|socket|gateway|fallback/i);
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(screen.queryByText(/couldn't refresh seat availability/i)).not.toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

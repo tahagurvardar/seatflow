@@ -13,6 +13,212 @@
   --radius-4xl: 2rem;
 }
 
+/*
+ * SeatFlow Next Experience v1.0 customer "Midnight Editorial" tokens.
+ * Scoped: only elements inside [data-theme-scope="customer"] receive them, so
+ * every existing page keeps its current theme. Seat colours are presentation
+ * only; availability, price and holds always come from the server.
+ */
+[data-theme-scope="customer"] {
+  color-scheme: dark;
+
+  --sf-canvas: #0b1220;
+  --sf-canvas-deep: #070d17;
+  --sf-surface: #111e30;
+  --sf-surface-raised: #192b40;
+  --sf-surface-hover: #23354a;
+  --sf-border: #304158;
+  --sf-text: #f8fafc;
+  --sf-text-secondary: #cbd5e1;
+  --sf-text-muted: #94a3b8;
+  --sf-brand: #f97316;
+  --sf-brand-hover: #fb923c;
+  --sf-on-brand: #0b1220;
+  --sf-link: #fdba74;
+  --sf-focus: #fdba74;
+  --sf-ticket-paper: #ffffff;
+
+  --sf-success: #4ade80;
+  --sf-danger: #fca5a5;
+  --sf-warning: #fcd34d;
+  --sf-info: #93c5fd;
+
+  --sf-seat-available: #60a5fa;
+  --sf-seat-selected: #f97316;
+  --sf-seat-premium: #d6a354;
+  --sf-seat-unavailable: #64748b;
+  --sf-seat-held-by-you: #a78bfa;
+
+  --sf-radius-input: 12px;
+  --sf-radius-button: 14px;
+  --sf-radius-card: 18px;
+  --sf-radius-hero: 28px;
+  --sf-radius-ticket: 24px;
+  --sf-touch-target: 44px;
+  --sf-motion-control: 160ms;
+  --sf-motion-panel: 220ms;
+}
+
+/*
+ * SeatFlow Next Experience v1.0 typography tokens (Tokens v1.0 `font` and
+ * `typographyPx`; line heights and display tracking from Design System section 2).
+ * Shared by both scopes. A separate block, so the M5 customer block above
+ * stays byte-for-byte unchanged and remains the first customer token block.
+ */
+[data-theme-scope="customer"],
+[data-theme-scope="organizer"] {
+  --sf-font-sans: Geist, Inter, ui-sans-serif, system-ui, sans-serif;
+  --sf-font-mono: "Geist Mono", ui-monospace, monospace;
+
+  --sf-text-body: 16px;
+  --sf-text-table: 14px;
+  --sf-text-card-title: 20px;
+  --sf-text-page-title-desktop: 44px;
+  --sf-text-page-title-mobile: 32px;
+  --sf-text-hero-desktop: 68px;
+  --sf-text-hero-mobile: 40px;
+
+  --sf-leading-display: 1.05;
+  --sf-leading-page-title: 1.12;
+  --sf-leading-section-title: 1.2;
+  --sf-leading-card-title: 1.3;
+  --sf-leading-table: 1.45;
+  --sf-leading-label: 1.35;
+  --sf-tracking-display: -0.04em;
+}
+
+/*
+ * SeatFlow Next Experience v1.0 organizer workspace tokens: "Light Premium
+ * SaaS" (default) and "Dark Midnight Studio". Same semantic --sf-* names as
+ * the customer scope so shared components can render in either workspace.
+ *
+ * Precedence: data-theme="dark" is always dark; data-theme="light" (or no
+ * attribute) is always light; only data-theme="system" follows
+ * prefers-color-scheme. Infrastructure only: no element uses this scope yet.
+ */
+[data-theme-scope="organizer"] {
+  color-scheme: light;
+
+  --sf-canvas: #f8fafc;
+  --sf-surface: #ffffff;
+  --sf-surface-raised: #f1f5f9;
+  --sf-surface-hover: #e9eff5;
+  --sf-border: #e2e8f0;
+  --sf-text: #0f172a;
+  --sf-text-secondary: #475569;
+  --sf-text-muted: #64748b;
+  --sf-brand: #f97316;
+  --sf-on-brand: #0b1220;
+  --sf-link: #c2410c;
+  --sf-focus: #c2410c;
+
+  --sf-success: #15803d;
+  --sf-danger: #b91c1c;
+  --sf-warning: #92400e;
+  --sf-info: #1d4ed8;
+
+  --sf-radius-input: 12px;
+  --sf-radius-button: 14px;
+  --sf-radius-card: 18px;
+  --sf-radius-hero: 28px;
+  --sf-radius-ticket: 24px;
+  --sf-touch-target: 44px;
+  --sf-motion-control: 160ms;
+  --sf-motion-panel: 220ms;
+}
+
+[data-theme-scope="organizer"][data-theme="dark"] {
+  color-scheme: dark;
+
+  --sf-canvas: #08111f;
+  --sf-surface: #111e30;
+  --sf-surface-raised: #192b40;
+  --sf-surface-hover: #23354a;
+  --sf-border: #304158;
+  --sf-text: #f8fafc;
+  --sf-text-secondary: #cbd5e1;
+  --sf-text-muted: #94a3b8;
+  --sf-brand: #f97316;
+  --sf-on-brand: #0b1220;
+  --sf-link: #fdba74;
+  --sf-focus: #fdba74;
+
+  --sf-success: #4ade80;
+  --sf-danger: #fca5a5;
+  --sf-warning: #fcd34d;
+  --sf-info: #93c5fd;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme-scope="organizer"][data-theme="system"] {
+    color-scheme: dark;
+
+    --sf-canvas: #08111f;
+    --sf-surface: #111e30;
+    --sf-surface-raised: #192b40;
+    --sf-surface-hover: #23354a;
+    --sf-border: #304158;
+    --sf-text: #f8fafc;
+    --sf-text-secondary: #cbd5e1;
+    --sf-text-muted: #94a3b8;
+    --sf-brand: #f97316;
+    --sf-on-brand: #0b1220;
+    --sf-link: #fdba74;
+    --sf-focus: #fdba74;
+
+    --sf-success: #4ade80;
+    --sf-danger: #fca5a5;
+    --sf-warning: #fcd34d;
+    --sf-info: #93c5fd;
+  }
+}
+
+/*
+ * Customer map seat. One class plus `data-seat-state` replaces ~20 utility
+ * classes per seat: on a 3,000-seat map that roughly halves style recalc on
+ * load. Visuals match the utility version (see SEAT_STATE_CLASSES, still used
+ * by the legend and the seat list).
+ */
+@layer components {
+  [data-theme-scope="customer"] .sf-seat {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 40% 40% 25% 25%;
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1;
+    user-select: none;
+    outline: none;
+    cursor: pointer;
+    color: var(--sf-on-brand);
+    background-color: var(--sf-seat-available);
+  }
+  [data-theme-scope="customer"] .sf-seat[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+  [data-theme-scope="customer"] .sf-seat[data-seat-state="premium"] {
+    background-color: var(--sf-seat-premium);
+  }
+  [data-theme-scope="customer"] .sf-seat[data-seat-state="selected"] {
+    background-color: var(--sf-seat-selected);
+    box-shadow: 0 0 0 1px var(--sf-canvas), 0 0 0 3px var(--sf-text);
+  }
+  [data-theme-scope="customer"] .sf-seat[data-seat-state="held-by-you"] {
+    background-color: var(--sf-seat-held-by-you);
+  }
+  [data-theme-scope="customer"] .sf-seat[data-seat-state="unavailable"],
+  [data-theme-scope="customer"] .sf-seat[data-seat-state="blocked"] {
+    background-color: var(--sf-seat-unavailable);
+    color: var(--sf-canvas);
+    opacity: 0.7;
+  }
+  [data-theme-scope="customer"] .sf-seat:focus-visible {
+    box-shadow: 0 0 0 2px var(--sf-canvas), 0 0 0 6px var(--sf-focus);
+  }
+}
+
 * {
   border-color: rgb(226 232 240);
 }

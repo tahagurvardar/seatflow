@@ -128,3 +128,25 @@ export function formatVenueDateTime(
     timeZoneName: "short",
   }).format(new Date(date));
 }
+
+/**
+ * Session start–end in the venue time zone, e.g. "Tue, 1 May 2035, 19:00–23:00 GMT+4".
+ * Intl collapses the shared date parts, so a same-day range repeats only the time.
+ */
+export function formatVenueDateTimeRange(
+  start: Date | string,
+  end: Date | string,
+  timeZone: string,
+  locale = "en-GB",
+) {
+  return new Intl.DateTimeFormat(locale, {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).formatRange(new Date(start), new Date(end));
+}

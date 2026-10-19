@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -37,60 +37,54 @@ afterEach(() => {
   noOpAction.mockClear();
 });
 
-describe("Phase 4A selectable coordinate seat map", () => {
-  it("renders coordinates, section, seat type, price, and customer-safe states", () => {
-    render(
-      <SelectableSeatMap
-        sections={sections}
-        maxSeats={8}
-        currency="AZN"
-        action={noOpAction}
-      />,
+// M5.4: SelectableSeatMap now composes the schematic venue map, the seat list
+// and the selection summary. The map seat buttons, the desktop rail and the
+// form are queried directly; jsdom applies no CSS, so the mobile sheet (a
+// second summary hidden at lg+) is also in the DOM and queries are scoped.
+function mapSeat(seatId: string) {
+  return document.querySelector<HTMLElement>(`[data-seat-id="${seatId}"]`)!;
+}
+
+function rail() {
+  return screen.getByRole("complementary", { name: "Your selection" });
+}
+
+describe("Phase 4A selectable seat map", () => {
+  it("renders section, seat type, price, and customer-safe states on the map", () => {
+    render(<SelectableSeatMap sections={sections} maxSeats={8} action={noOpAction} />);
+
+    const available = mapSeat("seat-1");
+    const heldByYou = mapSeat("seat-4");
+    const heldByAnother = mapSeat("seat-5");
+    const blocked = mapSeat("seat-6");
+
+    expect(available.getAttribute("aria-label")!.replace(/\u00a0/g, " ")).toMatch(
+      /^Main floor, row A, seat 1, available, AZN 10\.00$/,
     );
-
-    const available = screen.getByRole("button", {
-      name: /Main floor, row A, seat 1, standard: available.*10\.00/i,
-    });
-    const heldByYou = screen.getByRole("button", {
-      name: /seat 4, premium: held by you.*40\.00/i,
-    });
-    const heldByAnother = screen.getByRole("button", {
-      name: /seat 5, companion: unavailable/i,
-    });
-    const blocked = screen.getByRole("button", {
-      name: /seat 6, standard: blocked/i,
-    });
-
-    expect(available).toBeEnabled();
-    expect(heldByYou).toBeDisabled();
-    expect(heldByAnother).toBeDisabled();
+    expect(available).not.toHaveAttribute("aria-disabled");
+    expect(heldByYou).toHaveAccessibleName(/seat 4, held by you, premium seat.*40\.00/i);
+    expect(heldByYou).toHaveAttribute("aria-disabled", "true");
+    expect(heldByAnother).toHaveAccessibleName(/seat 5, unavailable, companion seat$/i);
+    expect(heldByAnother).toHaveAttribute("aria-disabled", "true");
     expect(heldByAnother).not.toHaveAccessibleName(/hold|customer|token/i);
-    expect(blocked).toBeDisabled();
-    expect(available.parentElement).toHaveAttribute("data-seat-coordinate", "0,0");
-    expect(available.parentElement).toHaveStyle({ left: "56px", top: "12px" });
+    expect(blocked).toHaveAccessibleName(/seat 6, unavailable$/i);
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    // Real seat order is kept on the schematic layout.
+    expect(parseFloat(mapSeat("seat-2").style.left)).toBeGreaterThan(parseFloat(available.style.left));
   });
 
   it("updates selected count and total, then enforces the maximum with feedback", async () => {
     const user = userEvent.setup();
-    render(
-      <SelectableSeatMap
-        sections={sections}
-        maxSeats={2}
-        currency="AZN"
-        action={noOpAction}
-      />,
-    );
+    render(<SelectableSeatMap sections={sections} maxSeats={2} action={noOpAction} />);
 
-    await user.click(screen.getByRole("button", { name: /seat 1, standard: available/i }));
-    await user.click(screen.getByRole("button", { name: /seat 2, premium: available/i }));
+    await user.click(mapSeat("seat-1"));
+    await user.click(mapSeat("seat-2"));
 
-    expect(screen.getByText("2 of 2 seats selected")).toBeInTheDocument();
-    expect(screen.getByText(/35\.00/)).toBeInTheDocument();
-    expect(screen.getByText(/reached the maximum of 2 seats/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /seat 3, accessible: available/i }),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Hold 2 seats" })).toBeEnabled();
+    expect(within(rail()).getByText(/2 of 2 seats selected/)).toBeInTheDocument();
+    expect(within(rail()).getByTestId("selection-total")).toHaveTextContent(/35\.00/);
+    expect(within(rail()).getByText(/reached the maximum of 2 seats/i)).toBeInTheDocument();
+    expect(mapSeat("seat-3")).toHaveAttribute("aria-disabled", "true");
+    expect(within(rail()).getByRole("button", { name: "Hold 2 seats" })).toBeEnabled();
   });
 
   it("shows a deterministic pending state while hold submission is in flight", async () => {
@@ -104,19 +98,12 @@ describe("Phase 4A selectable coordinate seat map", () => {
           resolveAction = resolve;
         }),
     );
-    render(
-      <SelectableSeatMap
-        sections={sections}
-        maxSeats={8}
-        currency="AZN"
-        action={action}
-      />,
-    );
+    render(<SelectableSeatMap sections={sections} maxSeats={8} action={action} />);
 
-    await user.click(screen.getByRole("button", { name: /seat 1, standard: available/i }));
-    await user.click(screen.getByRole("button", { name: "Hold 1 seat" }));
+    await user.click(mapSeat("seat-1"));
+    await user.click(within(rail()).getByRole("button", { name: "Hold 1 seat" }));
 
-    expect(await screen.findByRole("button", { name: "Holding…" })).toBeDisabled();
+    expect(await within(rail()).findByRole("button", { name: "Holding…" })).toBeDisabled();
     expect(action).toHaveBeenCalledTimes(1);
     const submitted = action.mock.calls[0]![1];
     expect(submitted.getAll("seatIds")).toEqual(["seat-1"]);
@@ -130,33 +117,19 @@ describe("Phase 4A selectable coordinate seat map", () => {
     const action = vi.fn(async () => ({
       message: "One or more selected seats are no longer available.",
     }));
-    render(
-      <SelectableSeatMap
-        sections={sections}
-        maxSeats={8}
-        currency="AZN"
-        action={action}
-      />,
-    );
+    render(<SelectableSeatMap sections={sections} maxSeats={8} action={action} />);
 
-    await user.click(screen.getByRole("button", { name: /seat 2, premium: available/i }));
-    await user.click(screen.getByRole("button", { name: "Hold 1 seat" }));
+    await user.click(mapSeat("seat-2"));
+    await user.click(within(rail()).getByRole("button", { name: "Hold 1 seat" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/no longer available/i);
-    expect(screen.getByText("1 of 8 seats selected")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /seat 2, premium: available/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(await within(rail()).findByRole("alert")).toHaveTextContent(/no longer available/i);
+    expect(within(rail()).getByText(/1 of 8 seats selected/)).toBeInTheDocument();
+    expect(mapSeat("seat-2")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders honest empty and temporarily unavailable states", () => {
     const { rerender } = render(
-      <SelectableSeatMap
-        sections={[]}
-        maxSeats={8}
-        currency={null}
-        action={noOpAction}
-      />,
+      <SelectableSeatMap sections={[]} maxSeats={8} action={noOpAction} />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(/no seats are available/i);
 
@@ -179,14 +152,12 @@ describe("Phase 4A selectable coordinate seat map", () => {
           },
         ]}
         maxSeats={8}
-        currency="AZN"
         action={noOpAction}
       />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      /no seats are currently available to hold/i,
-    );
-    expect(screen.getByRole("button", { name: /seat 1.*unavailable/i })).toBeDisabled();
+    expect(screen.getByText(/no seats are currently available to hold/i)).toHaveAttribute("role", "status");
+    expect(mapSeat("seat-1")).toHaveAccessibleName(/seat 1.*unavailable/i);
+    expect(mapSeat("seat-1")).toHaveAttribute("aria-disabled", "true");
   });
 });
 
