@@ -27,7 +27,10 @@ import {
 } from "../../src/server/tickets/issuance-service";
 import { revokeTicket, rotateTicketCredential } from "../../src/server/tickets/management-service";
 import { getCustomerTicketByReference } from "../../src/server/tickets/ticket-queries";
-import { validateTicketEntry } from "../../src/server/tickets/validation-service";
+import {
+  TicketScanIdempotencyConflictError,
+  validateTicketEntry,
+} from "../../src/server/tickets/validation-service";
 import {
   createRedisInventoryFixture,
   createRedisTestCustomer,
@@ -68,6 +71,23 @@ async function setupConfirmedBooking(prefix: string, seatCount = 2, issueImmedia
     where: { orderId: checkout.order.orderId },
     include: { seats: true, tickets: { include: { credentials: true } } },
   });
+  if (issueImmediately) {
+    // Immediate issuance is best-effort by design and swallows its own errors,
+    // so a failure would otherwise surface later as an unrelated-looking
+    // assertion. Fail here, with the recorded cause, instead.
+    const issuedWithActiveCredential = booking.tickets.filter((ticket) =>
+      ticket.credentials.some((credential) => credential.status === "ACTIVE"),
+    ).length;
+    if (issuedWithActiveCredential !== seatCount) {
+      const request = await database.ticketIssuanceRequest.findUnique({
+        where: { bookingId: booking.id },
+        select: { status: true, attemptCount: true, lastError: true },
+      });
+      throw new Error(
+        `Fixture expected ${seatCount} issued tickets, found ${issuedWithActiveCredential}; issuance request: ${JSON.stringify(request)}`,
+      );
+    }
+  }
   return { fixture, customer, booking };
 }
 
@@ -273,6 +293,195 @@ describe("Phase 5B authoritative entry validation", () => {
     const redemption = await database.ticketRedemptionEvent.findFirstOrThrow({ where: { ticketId: current.ticket.id } });
     await expect(database.ticketRedemptionEvent.update({ where: { id: redemption.id }, data: { outcome: "INVALID" } })).rejects.toThrow(/append-only/i);
     await expect(database.ticketRedemptionEvent.delete({ where: { id: redemption.id } })).rejects.toThrow(/append-only/i);
+  });
+});
+
+async function minutesUntilSessionStart(sessionId: string) {
+  // Measured against PostgreSQL's clock, the same clock the scan decision uses.
+  const [row] = await database.$queryRaw<Array<{ minutes: number }>>`
+    SELECT EXTRACT(EPOCH FROM ("startAt" - CURRENT_TIMESTAMP)) / 60 AS minutes
+    FROM "EventSession" WHERE "id" = ${sessionId}
+  `;
+  return Number(row!.minutes);
+}
+
+describe("v1.1 scanner entry window and authorization", () => {
+  it("rejects entry before the early window and admits once it has opened", async () => {
+    const context = await setupConfirmedBooking("entrywindow", 1);
+    const current = activeCredential(context);
+    const minutes = await minutesUntilSessionStart(context.fixture.session.id);
+    // Window opens two minutes from now: too early.
+    const early = await scan(context, current.plaintext, { earlyMinutes: Math.floor(minutes) - 2 });
+    expect(early).toEqual({ outcome: "TOO_EARLY", accepted: false });
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: current.ticket.id } })).status).toBe("ACTIVE");
+    // Window opened two minutes ago: admitted, exactly once.
+    const admitted = await scan(context, current.plaintext, { earlyMinutes: Math.ceil(minutes) + 2 });
+    expect(admitted).toMatchObject({ outcome: "ACCEPTED", accepted: true });
+    const outcomes = await database.ticketRedemptionEvent.findMany({
+      where: { ticketId: current.ticket.id },
+      orderBy: { createdAt: "asc" },
+      select: { outcome: true, rejectionReason: true },
+    });
+    expect(outcomes).toEqual([
+      { outcome: "TOO_EARLY", rejectionReason: "TOO_EARLY" },
+      { outcome: "ACCEPTED", rejectionReason: null },
+    ]);
+  });
+
+  it("denies a MEMBER of the organizer organization", async () => {
+    const context = await setupConfirmedBooking("memberscan", 1);
+    const current = activeCredential(context);
+    const eventSession = await database.eventSession.findUniqueOrThrow({
+      where: { id: context.fixture.session.id },
+      select: { event: { select: { organizerOrganizationId: true } } },
+    });
+    const member = await createRedisTestCustomer(database, "memberscanner");
+    await database.membership.create({
+      data: { userId: member.id, organizationId: eventSession.event.organizerOrganizationId, role: "MEMBER" },
+    });
+    expect(await scan(context, current.plaintext, { scannerUserId: member.id })).toEqual({
+      outcome: "UNAUTHORIZED_SCANNER",
+      accepted: false,
+    });
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: current.ticket.id } })).status).toBe("ACTIVE");
+  });
+
+  it("allows an ADMIN of the hosting venue organization to scan", async () => {
+    const context = await setupConfirmedBooking("venuescan", 1);
+    const current = activeCredential(context);
+    const eventSession = await database.eventSession.findUniqueOrThrow({
+      where: { id: context.fixture.session.id },
+      select: { venue: { select: { organizationId: true } } },
+    });
+    const venueAdmin = await createRedisTestCustomer(database, "venueadmin");
+    await database.membership.create({
+      data: { userId: venueAdmin.id, organizationId: eventSession.venue.organizationId, role: "ADMIN" },
+    });
+    expect(await scan(context, current.plaintext, { scannerUserId: venueAdmin.id })).toMatchObject({
+      outcome: "ACCEPTED",
+      accepted: true,
+    });
+  });
+
+  it("does not let a venue admin scan a session at another venue", async () => {
+    const context = await setupConfirmedBooking("venueother", 1);
+    const current = activeCredential(context);
+    const otherVenue = await createRedisInventoryFixture(database, "venueotherhost");
+    const otherSession = await database.eventSession.findUniqueOrThrow({
+      where: { id: otherVenue.session.id },
+      select: { venue: { select: { organizationId: true } } },
+    });
+    const foreignAdmin = await createRedisTestCustomer(database, "foreignadmin");
+    await database.membership.create({
+      data: { userId: foreignAdmin.id, organizationId: otherSession.venue.organizationId, role: "ADMIN" },
+    });
+    expect((await scan(context, current.plaintext, { scannerUserId: foreignAdmin.id })).outcome).toBe(
+      "UNAUTHORIZED_SCANNER",
+    );
+  });
+});
+
+describe("v1.1 scanner idempotency", () => {
+  it("replays an accepted scan for a retry under the same key without a second redemption", async () => {
+    const context = await setupConfirmedBooking("replayaccepted", 1);
+    const current = activeCredential(context);
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    const first = await scan(context, current.plaintext, { idempotencyKey });
+    const retry = await scan(context, current.plaintext, { idempotencyKey });
+    expect(first).toMatchObject({ outcome: "ACCEPTED", accepted: true });
+    expect(retry).toEqual(first);
+    expect(retry.ticket?.reference).toBe(current.ticket.publicReference);
+    expect(await database.ticketRedemptionEvent.count({ where: { ticketId: current.ticket.id } })).toBe(1);
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: current.ticket.id } })).status).toBe("USED");
+  });
+
+  it("answers simultaneous same-key requests with one decision and no unique violation", async () => {
+    const context = await setupConfirmedBooking("replayconcurrent", 1);
+    const current = activeCredential(context);
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => scan(context, current.plaintext, { idempotencyKey })),
+    );
+    expect(results.map((result) => result.outcome)).toEqual(["ACCEPTED", "ACCEPTED", "ACCEPTED", "ACCEPTED"]);
+    expect(await database.ticketRedemptionEvent.count({ where: { idempotencyKey } })).toBe(1);
+    expect(await database.ticketRedemptionEvent.count({ where: { ticketId: current.ticket.id, outcome: "ACCEPTED" } })).toBe(1);
+  });
+
+  it("still lets distinct keys race to exactly one acceptance", async () => {
+    const context = await setupConfirmedBooking("replaydistinct", 1);
+    const current = activeCredential(context);
+    const results = await Promise.all([scan(context, current.plaintext), scan(context, current.plaintext)]);
+    expect(results.map((result) => result.outcome).sort()).toEqual(["ACCEPTED", "ALREADY_USED"]);
+  });
+
+  it("refuses a key reused for a different credential and leaves that ticket untouched", async () => {
+    const context = await setupConfirmedBooking("replayconflict", 2);
+    const first = activeCredential(context, 0);
+    const second = activeCredential(context, 1);
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    expect((await scan(context, first.plaintext, { idempotencyKey })).outcome).toBe("ACCEPTED");
+    await expect(scan(context, second.plaintext, { idempotencyKey })).rejects.toBeInstanceOf(
+      TicketScanIdempotencyConflictError,
+    );
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: second.ticket.id } })).status).toBe("ACTIVE");
+    expect(await database.ticketRedemptionEvent.count({ where: { ticketId: second.ticket.id } })).toBe(0);
+    expect((await scan(context, second.plaintext)).outcome).toBe("ACCEPTED");
+  });
+
+  it("refuses to turn a recorded invalid scan into an evaluation of a real credential", async () => {
+    const context = await setupConfirmedBooking("replayinvalid", 1);
+    const current = activeCredential(context);
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    const forged = `SFT1.${"Z".repeat(43)}`;
+    expect((await scan(context, forged, { idempotencyKey })).outcome).toBe("INVALID");
+    expect(await scan(context, forged, { idempotencyKey })).toEqual({ outcome: "INVALID", accepted: false });
+    await expect(scan(context, current.plaintext, { idempotencyKey })).rejects.toBeInstanceOf(
+      TicketScanIdempotencyConflictError,
+    );
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: current.ticket.id } })).status).toBe("ACTIVE");
+  });
+
+  it("gives a different invalid credential under a spent key the same decision a fresh scan would", async () => {
+    const context = await setupConfirmedBooking("replaytwoinvalid", 1);
+    const current = activeCredential(context);
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    const forgedA = `SFT1.${"X".repeat(43)}`;
+    const forgedB = `SFT1.${"Y".repeat(43)}`;
+    expect(await scan(context, forgedA, { idempotencyKey })).toEqual({ outcome: "INVALID", accepted: false });
+    // A fresh evaluation of either forgery can only be INVALID, so the replay
+    // is the correct decision for B as well; it can never accept anything.
+    expect(await scan(context, forgedB, { idempotencyKey })).toEqual({ outcome: "INVALID", accepted: false });
+    expect(await scan(context, "not-a-credential", { idempotencyKey })).toEqual({ outcome: "INVALID", accepted: false });
+    expect(await scan(context, forgedB)).toEqual({ outcome: "INVALID", accepted: false });
+    // Only a credential that resolves is a different scan, and it is refused.
+    await expect(scan(context, current.plaintext, { idempotencyKey })).rejects.toBeInstanceOf(
+      TicketScanIdempotencyConflictError,
+    );
+    expect(await database.ticketRedemptionEvent.count({ where: { idempotencyKey } })).toBe(1);
+    expect(await database.ticketRedemptionEvent.count({ where: { outcome: "ACCEPTED" } })).toBe(0);
+    expect((await database.ticket.findUniqueOrThrow({ where: { id: current.ticket.id } })).status).toBe("ACTIVE");
+  });
+
+  it("replays a wrong-session rejection without disclosing ticket details", async () => {
+    const first = await setupConfirmedBooking("replaywrong", 1);
+    const current = activeCredential(first);
+    const second = await createRedisInventoryFixture(database, "replaywrongtarget");
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    const overrides = { scannerUserId: second.organizerScope.userId, sessionId: second.session.id, idempotencyKey };
+    const original = await scan(first, current.plaintext, overrides);
+    const retry = await scan(first, current.plaintext, overrides);
+    expect(original).toEqual({ outcome: "WRONG_SESSION", accepted: false });
+    expect(retry).toEqual(original);
+  });
+
+  it("scopes keys to the scanner, so another user's key never replays someone else's result", async () => {
+    const context = await setupConfirmedBooking("replayscope", 1);
+    const current = activeCredential(context);
+    const outsider = await createRedisTestCustomer(database, "replayoutsider");
+    const idempotencyKey = randomUUID().replaceAll("-", "");
+    expect((await scan(context, current.plaintext, { idempotencyKey })).outcome).toBe("ACCEPTED");
+    const replayAttempt = await scan(context, current.plaintext, { idempotencyKey, scannerUserId: outsider.id });
+    expect(replayAttempt).toEqual({ outcome: "UNAUTHORIZED_SCANNER", accepted: false });
   });
 });
 

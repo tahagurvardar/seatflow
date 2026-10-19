@@ -89,6 +89,7 @@ describe("Phase 5A booking views", () => {
     totalMinor: 2_500,
     confirmedAt: "2035-01-01T00:01:00.000Z",
     paymentStatus: "SUCCEEDED",
+    payment: { paidMinor: 2_500, refundedMinor: 0, inFlightMinor: 0 },
     event: { title: "Aurora Live", publicSlug: "seatflow--aurora-live" },
     session: { id: "session_1", startAt: "2035-02-01T18:00:00.000Z", timeZone: "Asia/Baku", venueName: "Main Hall", spaceName: "Auditorium", city: "Baku" },
     seats: [{ seatLabel: "1", rowLabel: "A", sectionName: "Orchestra", sectionCode: "ORCH", tierName: "Standard", tierCode: "STD", priceMinor: 2_500, currency: "AZN" }],
@@ -99,6 +100,16 @@ describe("Phase 5A booking views", () => {
     expect(screen.getByText("CONFIRMED")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view booking/i })).toBeInTheDocument();
     expect(screen.queryByText(/ticket/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["CONFIRMED", { paidMinor: 2_500, refundedMinor: 0, inFlightMinor: 0 }, "CONFIRMED"],
+    ["CONFIRMED", { paidMinor: 2_500, refundedMinor: 1_000, inFlightMinor: 0 }, "PARTIALLY REFUNDED"],
+    ["CONFIRMED", { paidMinor: 2_500, refundedMinor: 0, inFlightMinor: 2_500 }, "CONFIRMED"],
+    ["REFUNDED", { paidMinor: 2_500, refundedMinor: 2_500, inFlightMinor: 0 }, "REFUNDED"],
+  ] as const)("labels a %s booking with %o as %s", (status, payment, label) => {
+    render(<BookingSummaryCard booking={{ ...booking, status, payment }} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
   });
 
   it("renders organizer aggregates without customer identity", () => {

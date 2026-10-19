@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
+import type { EventCategory } from "@/generated/prisma/enums";
 import type { SupportedCurrency } from "@/config/site";
 import { getHoldConfiguration } from "@/features/holds/config";
 import {
@@ -8,7 +9,9 @@ import {
 import {
   countSelectionStates,
   mapSeatSelectionSections,
+  selectionPriceTiers,
   type SelectionAvailabilityCounts,
+  type SelectionPriceTierView,
   type SelectionSectionView,
 } from "@/features/holds/inventory";
 import {
@@ -22,10 +25,17 @@ import {
 import { holdViewInclude, mapHoldToView } from "@/server/holds/hold-service";
 
 export interface SeatSelectionView {
-  event: { title: string; publicSlug: string };
+  event: {
+    title: string;
+    publicSlug: string;
+    category: EventCategory;
+    /** Organizer-provided cover image path, or null when none was uploaded. */
+    imagePath: string | null;
+  };
   session: {
     id: string;
     startAt: string;
+    endAt: string;
     salesEndAt: string;
     timeZone: string;
     venueName: string;
@@ -35,6 +45,8 @@ export interface SeatSelectionView {
     seatMapVersion: number;
   };
   sections: SelectionSectionView[];
+  /** Real session price tiers that price this session's inventory. */
+  priceTiers: SelectionPriceTierView[];
   counts: SelectionAvailabilityCounts;
   eligibility: SessionSalesEligibility;
   currency: SupportedCurrency | null;
@@ -94,7 +106,14 @@ export async function getSeatSelectionView(
 ): Promise<SeatSelectionView | null> {
   const event = await database.event.findFirst({
     where: { publicSlug: input.publicSlug, status: "PUBLISHED" },
-    select: { id: true, title: true, publicSlug: true, status: true },
+    select: {
+      id: true,
+      title: true,
+      publicSlug: true,
+      status: true,
+      category: true,
+      imagePath: true,
+    },
   });
   if (!event) return null;
 
@@ -110,6 +129,20 @@ export async function getSeatSelectionView(
       seatId: true,
       state: true,
       currentHoldId: true,
+      priceMinor: true,
+      currency: true,
+      priceTierId: true,
+    },
+  });
+
+  const tiers = await database.sessionPriceTier.findMany({
+    where: { sessionId: session.id },
+    orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      description: true,
       priceMinor: true,
       currency: true,
     },
@@ -139,10 +172,16 @@ export async function getSeatSelectionView(
   });
 
   return {
-    event: { title: event.title, publicSlug: event.publicSlug },
+    event: {
+      title: event.title,
+      publicSlug: event.publicSlug,
+      category: event.category,
+      imagePath: event.imagePath,
+    },
     session: {
       id: session.id,
       startAt: session.startAt.toISOString(),
+      endAt: session.endAt.toISOString(),
       salesEndAt: session.salesEndAt.toISOString(),
       timeZone: session.venue.timeZone,
       venueName: session.venue.name,
@@ -152,6 +191,7 @@ export async function getSeatSelectionView(
       seatMapVersion: session.seatMap.version,
     },
     sections,
+    priceTiers: selectionPriceTiers(tiers, inventory),
     counts: countSelectionStates(sections),
     eligibility,
     currency: inventory[0]?.currency ?? null,

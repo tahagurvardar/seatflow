@@ -10,6 +10,9 @@ import {
 } from "@/components/holds/use-inventory-invalidation";
 import type { OrganizerInventorySummary as OrganizerInventorySummaryView } from "@/features/holds/view-models";
 
+const REFRESH_FAILED_NOTICE =
+  "Inventory totals couldn't be refreshed just now. SeatFlow will keep trying automatically.";
+
 export function RealtimeOrganizerInventory({
   sessionId,
   organizationSlug,
@@ -44,9 +47,10 @@ export function RealtimeOrganizerInventory({
         };
         setSummary(snapshot.summary);
         if (reason === "event") setNotice("Aggregate inventory refreshed after an inventory change.");
+        else setNotice((current) => (current === REFRESH_FAILED_NOTICE ? null : current));
         return snapshot.realtimeTicket;
       } catch {
-        setNotice("Live aggregate refresh is temporarily unavailable. Refresh fallback remains active.");
+        setNotice(REFRESH_FAILED_NOTICE);
         return null;
       }
     },

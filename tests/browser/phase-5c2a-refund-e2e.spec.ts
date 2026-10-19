@@ -369,7 +369,11 @@ test.describe("authenticated customer refund lifecycle", () => {
     const body = (await page.textContent("body")) ?? "";
     expect(body).toContain("Succeeded");
     expect(body).toContain("REFUNDED BOOKING");
-    expect(body).toContain("Tickets marked revoked were refunded");
+    expect(body).toContain("Cancelled tickets can no longer be used for entry");
+    expect(body).toContain("This ticket was cancelled because it was refunded");
+    expect(body).toContain("Net paid");
+    expect(body).toContain("Ticket PDFs are no longer available because this booking was refunded");
+    expect(body).not.toContain("Download booking PDF");
     await expectNoLeaks(page);
   });
 

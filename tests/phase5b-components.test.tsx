@@ -9,6 +9,7 @@ function ticket(status: CustomerTicketView["status"]): CustomerTicketView {
   return {
     publicReference: "A".repeat(32),
     bookingReference: "B".repeat(32),
+    bookingStatus: "CONFIRMED",
     status,
     issuedAt: "2026-07-18T10:00:00.000Z",
     revokedAt: status === "REVOKED" ? "2026-07-18T11:00:00.000Z" : null,

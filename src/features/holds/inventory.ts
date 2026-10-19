@@ -105,6 +105,11 @@ export interface SelectionSeatView {
   /** Price is exposed only for seats the customer could select. */
   priceMinor: number | null;
   currency: SupportedCurrency | null;
+  /**
+   * Session price tier of the seat's inventory row, exposed under the same rule
+   * as the price. Optional so older snapshots and fixtures stay valid.
+   */
+  priceTierId?: string | null;
 }
 
 export interface SelectionSectionView {
@@ -136,6 +141,8 @@ export interface InventorySnapshot {
   currentHoldId: string | null;
   priceMinor: number;
   currency: SupportedCurrency;
+  /** Optional: callers that do not load tiers keep working unchanged. */
+  priceTierId?: string;
 }
 
 /**
@@ -186,6 +193,7 @@ function mapSeat(
       state: seat.state === "BLOCKED" ? "BLOCKED" : "UNAVAILABLE",
       priceMinor: null,
       currency: null,
+      ...(snapshot?.priceTierId !== undefined ? { priceTierId: null } : {}),
     };
   }
 
@@ -204,7 +212,55 @@ function mapSeat(
     state,
     priceMinor: selectable ? snapshot.priceMinor : null,
     currency: selectable ? snapshot.currency : null,
+    ...(snapshot.priceTierId !== undefined
+      ? { priceTierId: selectable ? snapshot.priceTierId : null }
+      : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session price tiers shown beside the map (read-only presentation data)
+// ---------------------------------------------------------------------------
+
+export interface SelectionPriceTierView {
+  id: string;
+  name: string;
+  code: string;
+  description: string | null;
+  priceMinor: number;
+  currency: SupportedCurrency;
+}
+
+interface PriceTierSource {
+  id: string;
+  name: string;
+  code: string;
+  description: string | null;
+  priceMinor: number;
+  currency: SupportedCurrency;
+}
+
+/**
+ * The session's real price tiers that actually price sellable inventory, in
+ * their configured display order. Tiers with no inventory rows (for example,
+ * created but never assigned to a section) are omitted so the customer never
+ * sees a price nothing on the map can be bought at.
+ */
+export function selectionPriceTiers(
+  tiers: readonly PriceTierSource[],
+  inventory: readonly Pick<InventorySnapshot, "priceTierId">[],
+): SelectionPriceTierView[] {
+  const used = new Set(inventory.map((entry) => entry.priceTierId));
+  return tiers
+    .filter((tier) => used.has(tier.id))
+    .map((tier) => ({
+      id: tier.id,
+      name: tier.name,
+      code: tier.code,
+      description: tier.description,
+      priceMinor: tier.priceMinor,
+      currency: tier.currency,
+    }));
 }
 
 export interface SelectionAvailabilityCounts {

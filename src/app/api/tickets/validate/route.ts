@@ -9,7 +9,10 @@ import {
   consumeRateLimit,
 } from "@/server/realtime/request-rate-limit";
 import { applyRateLimit } from "@/server/security/route-guard";
-import { validateTicketEntry } from "@/server/tickets/validation-service";
+import {
+  TicketScanIdempotencyConflictError,
+  validateTicketEntry,
+} from "@/server/tickets/validation-service";
 
 export const dynamic = "force-dynamic";
 
@@ -86,13 +89,25 @@ export async function POST(request: Request) {
     return Response.json({ error: "Ticket scan request is invalid." }, { status: 400, headers });
   }
 
-  const result = await validateTicketEntry(getDatabase(), {
-    scannerUserId: auth.user.id,
-    ...parsed.data,
-    credentialSecret: environment.TICKET_CREDENTIAL_SECRET,
-    earlyMinutes: environment.TICKET_ENTRY_EARLY_MINUTES,
-    lateMinutes: environment.TICKET_ENTRY_LATE_MINUTES,
-  });
+  let result: Awaited<ReturnType<typeof validateTicketEntry>>;
+  try {
+    result = await validateTicketEntry(getDatabase(), {
+      scannerUserId: auth.user.id,
+      ...parsed.data,
+      credentialSecret: environment.TICKET_CREDENTIAL_SECRET,
+      earlyMinutes: environment.TICKET_ENTRY_EARLY_MINUTES,
+      lateMinutes: environment.TICKET_ENTRY_LATE_MINUTES,
+    });
+  } catch (error) {
+    if (!(error instanceof TicketScanIdempotencyConflictError)) throw error;
+    logger.warn("ticket scan idempotency key reused for a different scan", {
+      outcome: "idempotency_conflict",
+    });
+    return Response.json(
+      { error: "This scan key was already used for a different ticket. Scan again." },
+      { status: 409, headers },
+    );
+  }
 
   // The outcome is a closed enum, so it is a safe bounded label. No credential,
   // ticket reference, seat, or customer identity is logged.

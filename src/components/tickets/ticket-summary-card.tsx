@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonStyles } from "@/components/ui/button";
 import { ROUTES } from "@/config/site";
 import { formatVenueDateTime } from "@/features/events/date-time";
-import { ticketEntryLabel } from "@/features/tickets/lifecycle";
+import { ticketEntryLabel, ticketRevocationMessage } from "@/features/tickets/lifecycle";
 import type { CustomerTicketView } from "@/server/tickets/ticket-queries";
 
 const statusStyles = {
@@ -29,6 +29,9 @@ export function TicketSummaryCard({ ticket }: { ticket: CustomerTicketView }) {
         {ticket.seat.sectionName} · Row {ticket.seat.rowLabel} · Seat {ticket.seat.seatLabel}
       </p>
       <p className="mt-1 text-xs text-slate-500">{ticket.session.venueName} · {ticketEntryLabel(ticket.status)}</p>
+      {ticket.status === "REVOKED" ? (
+        <p className="mt-2 text-xs text-red-800">{ticketRevocationMessage(ticket.revocationReason)}</p>
+      ) : null}
       <p className="mt-4 break-all font-mono text-xs text-slate-500">Ticket {ticket.publicReference}</p>
       <div className="mt-5 flex justify-end">
         <Link href={ROUTES.customerTicket(ticket.publicReference)} className={buttonStyles({ variant: "outline", size: "sm" })}>

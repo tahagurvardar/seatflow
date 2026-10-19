@@ -109,9 +109,10 @@ describe("Phase 4B client ordering, reconnect, and reconciliation", () => {
     expect(
       shouldRefreshAfterRealtimeTransition({ previous: "live", next: "live" }),
     ).toBe(false);
-    expect(toConnectionStateView("live").label).toBe("Live");
-    expect(toConnectionStateView("reconnecting").label).toBe("Reconnecting");
-    expect(toConnectionStateView("fallback").label).toMatch(/refresh fallback/i);
+    expect(toConnectionStateView("live").label).toBe("Live updates on");
+    expect(toConnectionStateView("reconnecting").label).toBe("Reconnecting live updates");
+    expect(toConnectionStateView("fallback").label).toBe("Live updates paused");
+    expect(toConnectionStateView("polling").label).toBe("Auto-refresh on");
   });
 
   it("removes only selections no longer available", () => {

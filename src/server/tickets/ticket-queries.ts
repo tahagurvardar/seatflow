@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
-import type { TicketStatus } from "@/generated/prisma/enums";
+import type { BookingStatus, TicketStatus } from "@/generated/prisma/enums";
 import { findAuthorizedEventSession } from "@/server/authorization/event-resources";
 
 const ticketViewInclude = {
@@ -10,7 +10,7 @@ const ticketViewInclude = {
       space: { select: { name: true } },
     },
   },
-  booking: { select: { publicReference: true } },
+  booking: { select: { publicReference: true, status: true } },
   bookingSeat: {
     select: {
       seatLabel: true,
@@ -32,6 +32,7 @@ type TicketWithView = Prisma.TicketGetPayload<{ include: typeof ticketViewInclud
 export interface CustomerTicketView {
   publicReference: string;
   bookingReference: string;
+  bookingStatus: BookingStatus;
   status: TicketStatus;
   issuedAt: string;
   revokedAt: string | null;
@@ -60,6 +61,7 @@ export function mapTicketToView(ticket: TicketWithView): CustomerTicketView {
   return {
     publicReference: ticket.publicReference,
     bookingReference: ticket.booking.publicReference,
+    bookingStatus: ticket.booking.status,
     status: ticket.status,
     issuedAt: ticket.issuedAt.toISOString(),
     revokedAt: ticket.revokedAt?.toISOString() ?? null,

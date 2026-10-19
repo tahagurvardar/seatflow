@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type { SupportedCurrency } from "@/config/site";
+import type { BookingPaymentFigures } from "@/features/bookings/payment-summary";
 import { findAuthorizedEventSession } from "@/server/authorization/event-resources";
 import { CheckoutAuthorizationError } from "@/server/payments/errors";
 
@@ -16,7 +17,13 @@ const bookingViewInclude = {
     select: {
       publicReference: true,
       status: true,
-      paymentAttempts: { orderBy: { createdAt: "desc" }, take: 1, select: { status: true } },
+      // All attempts of the order, newest first: the newest supplies the status,
+      // and the captured (SUCCEEDED) one supplies the authoritative amounts.
+      // An order has very few attempts, so this stays a small read.
+      paymentAttempts: {
+        orderBy: { createdAt: "desc" },
+        select: { status: true, amountMinor: true, refundedMinor: true, inFlightRefundMinor: true },
+      },
     },
   },
 } satisfies Prisma.BookingInclude;
@@ -30,6 +37,8 @@ export interface CustomerBookingView {
   totalMinor: number;
   confirmedAt: string;
   paymentStatus: string;
+  /** Amounts from the captured payment attempt's ledger columns. */
+  payment: BookingPaymentFigures;
   event: { title: string; publicSlug: string };
   session: {
     id: string;
@@ -52,6 +61,7 @@ export interface CustomerBookingView {
 }
 
 export function mapBookingToView(booking: BookingWithView): CustomerBookingView {
+  const captured = booking.order.paymentAttempts.find((attempt) => attempt.status === "SUCCEEDED");
   return {
     publicReference: booking.publicReference,
     status: booking.status,
@@ -59,6 +69,13 @@ export function mapBookingToView(booking: BookingWithView): CustomerBookingView 
     totalMinor: booking.totalMinor,
     confirmedAt: booking.confirmedAt.toISOString(),
     paymentStatus: booking.order.paymentAttempts[0]?.status ?? "SUCCEEDED",
+    payment: captured
+      ? {
+          paidMinor: captured.amountMinor,
+          refundedMinor: captured.refundedMinor,
+          inFlightMinor: captured.inFlightRefundMinor,
+        }
+      : { paidMinor: booking.totalMinor, refundedMinor: 0, inFlightMinor: 0 },
     event: booking.event,
     session: {
       id: booking.session.id,

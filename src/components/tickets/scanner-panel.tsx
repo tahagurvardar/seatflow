@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  createScanIdempotencyKey,
+  type PendingScanAttempt,
+  resolveScanAttempt,
+  shouldRetainScanAttempt,
+} from "@/features/tickets/scan-attempt";
 
 interface ScanResult {
   outcome: string;
@@ -32,6 +38,7 @@ export function ScannerPanel({ sessionId }: { sessionId: string }) {
   const streamRef = useRef<MediaStream | null>(null);
   const frameRef = useRef<number | null>(null);
   const busyRef = useRef(false);
+  const pendingAttemptRef = useRef<PendingScanAttempt | null>(null);
   const [credential, setCredential] = useState("");
   const [result, setResult] = useState<ScanResult | null>(null);
   const [message, setMessage] = useState("Camera is off. Manual entry is always available.");
@@ -72,25 +79,47 @@ export function ScannerPanel({ sessionId }: { sessionId: string }) {
     }
     busyRef.current = true;
     setMessage("Checking authoritative ticket state…");
+    // Reuse the key of an unanswered attempt for the same credential, so a
+    // retry replays the server's original decision rather than re-scanning.
+    const attempt = resolveScanAttempt(
+      pendingAttemptRef.current,
+      { credential: normalized, sessionId },
+      createScanIdempotencyKey,
+    );
+    pendingAttemptRef.current = attempt;
     try {
-      const response = await fetch("/api/tickets/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          credential: normalized,
-          sessionId,
-          idempotencyKey: crypto.randomUUID().replaceAll("-", ""),
-          scannerIdentifier: source === "camera" ? "web-camera" : "web-manual",
-        }),
-      });
-      const payload = await response.json() as ScanResult & { error?: string };
-      if (!response.ok && !payload.outcome) throw new Error(payload.error ?? "Validation failed.");
+      let response: Response;
+      try {
+        response = await fetch("/api/tickets/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            credential: normalized,
+            sessionId,
+            idempotencyKey: attempt.idempotencyKey,
+            scannerIdentifier: source === "camera" ? "web-camera" : "web-manual",
+          }),
+        });
+      } catch {
+        setResult({ outcome: "NETWORK_ERROR", accepted: false });
+        setMessage("SeatFlow could not be reached. No decision was made here; retrying this ticket is safe.");
+        return;
+      }
+      if (!shouldRetainScanAttempt(response)) pendingAttemptRef.current = null;
+      const payload = await response.json().catch(() => null) as (ScanResult & { error?: string }) | null;
+      if (!payload?.outcome) {
+        const retryable = shouldRetainScanAttempt(response);
+        setResult({ outcome: retryable ? "NOT_CONFIRMED" : "NOT_VALIDATED", accepted: false });
+        setMessage(
+          retryable
+            ? "SeatFlow could not confirm this ticket yet. Retrying this ticket is safe."
+            : payload?.error ?? "SeatFlow could not validate this ticket.",
+        );
+        return;
+      }
       setResult(payload);
       setMessage(payload.accepted ? "Entry accepted." : `Entry rejected: ${payload.outcome.replaceAll("_", " ").toLowerCase()}.`);
       setCredential("");
-    } catch {
-      setResult({ outcome: "NETWORK_ERROR", accepted: false });
-      setMessage("SeatFlow could not validate this ticket. No offline decision was made.");
     } finally {
       busyRef.current = false;
     }

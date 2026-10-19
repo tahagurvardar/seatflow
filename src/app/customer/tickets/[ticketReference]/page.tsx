@@ -8,7 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Container, Section } from "@/components/ui/container";
 import { ROUTES } from "@/config/site";
 import { formatVenueDateTime } from "@/features/events/date-time";
-import { ticketEntryLabel } from "@/features/tickets/lifecycle";
+import {
+  ticketEntryLabel,
+  ticketPdfAvailability,
+  ticketRevocationMessage,
+} from "@/features/tickets/lifecycle";
 import { requireAuth } from "@/lib/authorization";
 import { getDatabase } from "@/lib/database";
 import { getCustomerTicketByReference } from "@/server/tickets/ticket-queries";
@@ -29,6 +33,11 @@ export default async function CustomerTicketDetailPage({
     publicReference: ticketReference,
   });
   if (!ticket) notFound();
+  const pdf = ticketPdfAvailability({
+    bookingStatus: ticket.bookingStatus,
+    ticketStatuses: [ticket.status],
+    viewedTicketStatus: ticket.status,
+  });
   return (
     <Section className="bg-slate-50">
       <Container className="max-w-5xl">
@@ -49,9 +58,9 @@ export default async function CustomerTicketDetailPage({
                 <div><dt className="text-xs font-bold uppercase tracking-wide text-slate-500">Ticket reference</dt><dd className="mt-1 break-all font-mono text-sm text-slate-900">{ticket.publicReference}</dd></div>
                 <div><dt className="text-xs font-bold uppercase tracking-wide text-slate-500">Entry</dt><dd className="mt-1 font-bold text-slate-900">{ticketEntryLabel(ticket.status)}</dd></div>
               </dl>
-              {ticket.status === "REVOKED" ? <p className="mt-5 rounded-2xl bg-red-50 p-4 text-sm text-red-800">This ticket is revoked and cannot be used for entry. {ticket.revocationReason ? `Reason: ${ticket.revocationReason}` : "Contact the organizer for help."}</p> : null}
+              {ticket.status === "REVOKED" ? <p className="mt-5 rounded-2xl bg-red-50 p-4 text-sm text-red-800">{ticketRevocationMessage(ticket.revocationReason)}</p> : null}
               {ticket.status === "USED" ? <p className="mt-5 rounded-2xl bg-sky-50 p-4 text-sm text-sky-800">Entry has already been accepted for this ticket. Its credential cannot be rotated or reused.</p> : null}
-              <div className="mt-6"><PdfDownloadButton bookingReference={ticket.bookingReference} /></div>
+              <div className="mt-6">{pdf.available ? <PdfDownloadButton bookingReference={ticket.bookingReference} /> : <p className="text-sm text-slate-600">{pdf.message}</p>}</div>
             </section>
           </div>
           <aside className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:sticky lg:top-24 lg:self-start">
@@ -64,7 +73,7 @@ export default async function CustomerTicketDetailPage({
                 <p className="mt-4 text-sm text-slate-600">Show this code at entry. Validation requires a network connection to SeatFlow.</p>
               </>
             ) : (
-              <div className="mt-4 rounded-2xl bg-slate-100 p-5 text-sm text-slate-700">The QR is unavailable because this ticket is {ticket.status.toLowerCase()}.</div>
+              <div className="mt-4 rounded-2xl bg-slate-100 p-5 text-sm text-slate-700">{ticket.status === "USED" ? "No entry QR is shown because this ticket has already been used for entry." : ticket.status === "REVOKED" ? "No entry QR is shown because this ticket was cancelled." : "The entry QR is being prepared. Refresh this page in a moment."}</div>
             )}
           </aside>
         </div>

@@ -67,6 +67,23 @@ const STATUS_PRESENTATION: Record<
   },
 };
 
+/**
+ * Shown for a status this page does not know, for example one added later.
+ * It must never claim progress or success the record does not state.
+ */
+const UNKNOWN_STATUS_PRESENTATION = {
+  label: "Status updating",
+  description:
+    "We are confirming the latest status of this refund. Check this page again shortly; no action is needed from you.",
+  className: "bg-slate-100 text-slate-700 ring-slate-600/10",
+};
+
+export function refundStatusPresentation(status: string) {
+  return Object.hasOwn(STATUS_PRESENTATION, status)
+    ? STATUS_PRESENTATION[status]!
+    : UNKNOWN_STATUS_PRESENTATION;
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
@@ -90,8 +107,7 @@ export function RefundHistory({ refunds }: { refunds: RefundHistoryEntry[] }) {
       <h2 className="text-2xl font-black text-slate-950">Refund history</h2>
       <ul className="mt-5 space-y-4">
         {refunds.map((refund) => {
-          const presentation =
-            STATUS_PRESENTATION[refund.status] ?? STATUS_PRESENTATION.REQUESTED!;
+          const presentation = refundStatusPresentation(refund.status);
           return (
             <li
               key={refund.publicReference}
